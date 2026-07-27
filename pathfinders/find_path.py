@@ -19,7 +19,7 @@ import heapq
 import math
 import itertools
 
-from src.data_utils import get_graph_hash, mutate_ranks, mutate_adjacency, is_connected
+from src.data_utils import get_graph_hash, get_wl_hash, get_isomorphism_mapping, mutate_ranks, mutate_adjacency, is_connected
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +70,12 @@ class LCAPathfinder:
         if start_hash == target_hash:
             return {"path": [], "visited_states": 1, "status": "success", "nodes_explored": 0}
 
+        start_wl_hash = get_wl_hash(ranks_a, adj_a)
+        target_wl_hash = get_wl_hash(ranks_b, adj_b)
+        if start_wl_hash == target_wl_hash:
+            if get_isomorphism_mapping(ranks_a, adj_a, ranks_b, adj_b) is not None:
+                return {"path": [], "visited_states": 1, "status": "success", "nodes_explored": 0}
+
         counter = itertools.count()
         
         pq_a = [(0, next(counter), start_hash)]
@@ -78,6 +84,11 @@ class LCAPathfinder:
         # Maps hash -> (cost, ranks, adj, path)
         history_a = {start_hash: (0, ranks_a, adj_a, [])}
         history_b = {target_hash: (0, ranks_b, adj_b, [])}
+        
+        wl_map_a = defaultdict(list)
+        wl_map_b = defaultdict(list)
+        wl_map_a[start_wl_hash].append(start_hash)
+        wl_map_b[target_wl_hash].append(target_hash)
         
         total_steps = 0
         
@@ -100,22 +111,28 @@ class LCAPathfinder:
                 for k, new_ranks, new_adj, step_cost in neighbors:
                     new_cost = curr_cost + step_cost
                     new_hash = get_graph_hash(new_ranks, new_adj)
+                    new_wl_hash = get_wl_hash(new_ranks, new_adj)
                     new_path = curr_path + [k]
                     
-                    if new_hash in history_b:
-                        # Path found!
-                        path_a = new_path
-                        path_b = history_b[new_hash][3]
-                        return {
-                            "path": path_a + list(reversed(path_b)),
-                            "visited_states": len(history_a) + len(history_b),
-                            "status": "success",
-                            "nodes_explored": len(history_a) + len(history_b)
-                        }
-                        
                     if new_hash not in history_a or new_cost < history_a[new_hash][0]:
                         history_a[new_hash] = (new_cost, new_ranks, new_adj, new_path)
+                        wl_map_a[new_wl_hash].append(new_hash)
                         heapq.heappush(pq_a, (new_cost, next(counter), new_hash))
+                        
+                    if new_wl_hash in wl_map_b:
+                        for other_md5 in wl_map_b[new_wl_hash]:
+                            _, other_ranks, other_adj, other_path = history_b[other_md5]
+                            mapping = get_isomorphism_mapping(new_ranks, new_adj, other_ranks, other_adj)
+                            if mapping is not None:
+                                path_a = new_path
+                                inv_mapping = {v: v_k for v_k, v in mapping.items()}
+                                translated_path_b = [inv_mapping[step] for step in reversed(other_path)]
+                                return {
+                                    "path": path_a + translated_path_b,
+                                    "visited_states": len(history_a) + len(history_b),
+                                    "status": "success",
+                                    "nodes_explored": len(history_a) + len(history_b)
+                                }
             else:
                 curr_cost, _, curr_hash = heapq.heappop(pq_b)
                 if curr_hash not in history_b or history_b[curr_hash][0] < curr_cost:
@@ -127,22 +144,28 @@ class LCAPathfinder:
                 for k, new_ranks, new_adj, step_cost in neighbors:
                     new_cost = curr_cost + step_cost
                     new_hash = get_graph_hash(new_ranks, new_adj)
+                    new_wl_hash = get_wl_hash(new_ranks, new_adj)
                     new_path = curr_path + [k]
                     
-                    if new_hash in history_a:
-                        # Path found!
-                        path_a = history_a[new_hash][3]
-                        path_b = new_path
-                        return {
-                            "path": path_a + list(reversed(path_b)),
-                            "visited_states": len(history_a) + len(history_b),
-                            "status": "success",
-                            "nodes_explored": len(history_a) + len(history_b)
-                        }
-                        
                     if new_hash not in history_b or new_cost < history_b[new_hash][0]:
                         history_b[new_hash] = (new_cost, new_ranks, new_adj, new_path)
+                        wl_map_b[new_wl_hash].append(new_hash)
                         heapq.heappush(pq_b, (new_cost, next(counter), new_hash))
+                        
+                    if new_wl_hash in wl_map_a:
+                        for other_md5 in wl_map_a[new_wl_hash]:
+                            _, other_ranks, other_adj, other_path = history_a[other_md5]
+                            mapping = get_isomorphism_mapping(other_ranks, other_adj, new_ranks, new_adj)
+                            if mapping is not None:
+                                path_a = other_path
+                                inv_mapping = {v: v_k for v_k, v in mapping.items()}
+                                translated_path_b = [inv_mapping[step] for step in reversed(new_path)]
+                                return {
+                                    "path": path_a + translated_path_b,
+                                    "visited_states": len(history_a) + len(history_b),
+                                    "status": "success",
+                                    "nodes_explored": len(history_a) + len(history_b)
+                                }
                         
         if not pq_a and not pq_b:
             return {
@@ -169,7 +192,7 @@ class HeuristicBidirectionalPathfinder:
         self.counter = itertools.count()
 
     def _expand_frontier(
-        self, pq, visited, other_visited, target_ranks, target_adj, max_steps, is_forward,
+        self, pq, visited, other_visited, this_wl_map, other_wl_map, target_ranks, target_adj, max_steps, is_forward,
         enforce_anomaly_free=True,
     ):
         """
@@ -189,10 +212,20 @@ class HeuristicBidirectionalPathfinder:
             return None  # Don't expand beyond budget
 
         c_hash = get_graph_hash(c_ranks, c_adj)
+        c_wl_hash = get_wl_hash(c_ranks, c_adj)
 
         # Check if this node was already reached by the other side
-        if c_hash in other_visited:
-            return c_hash
+        if c_wl_hash in other_wl_map:
+            for other_md5 in other_wl_map[c_wl_hash]:
+                other_node = other_visited[other_md5]
+                if is_forward:
+                    mapping = get_isomorphism_mapping(c_ranks, c_adj, other_node["ranks"], other_node["adj"])
+                else:
+                    mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], c_ranks, c_adj)
+                if mapping is not None:
+                    fwd_md5 = c_hash if is_forward else other_md5
+                    bwd_md5 = other_md5 if is_forward else c_hash
+                    return fwd_md5, bwd_md5, mapping
 
         # Expand valid mutations
         n_nodes = len(c_ranks)
@@ -209,8 +242,6 @@ class HeuristicBidirectionalPathfinder:
             if new_adj is None or not is_connected(new_adj):
                 continue
 
-
-
             new_hash = get_graph_hash(new_ranks, new_adj)
             if new_hash not in visited:
                 visited[new_hash] = {
@@ -219,13 +250,25 @@ class HeuristicBidirectionalPathfinder:
                     "g_score": g_score + 1,
                     "path": path + [k],
                 }
+                new_wl_hash = get_wl_hash(new_ranks, new_adj)
+                this_wl_map[new_wl_hash].append(new_hash)
                 valid_mutants_ranks.append(new_ranks)
                 valid_mutants_adj.append(new_adj)
                 valid_mutants_k.append(k)
 
                 # Immediate meeting check
-                if new_hash in other_visited:
-                    return new_hash
+                if new_wl_hash in other_wl_map:
+                    for other_md5 in other_wl_map[new_wl_hash]:
+                        other_node = other_visited[other_md5]
+                        if is_forward:
+                            mapping = get_isomorphism_mapping(new_ranks, new_adj, other_node["ranks"], other_node["adj"])
+                        else:
+                            mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], new_ranks, new_adj)
+                        
+                        if mapping is not None:
+                            fwd_md5 = new_hash if is_forward else other_md5
+                            bwd_md5 = other_md5 if is_forward else new_hash
+                            return fwd_md5, bwd_md5, mapping
 
         if not valid_mutants_ranks:
             return None
@@ -283,12 +326,20 @@ class HeuristicBidirectionalPathfinder:
         if start_hash == target_hash:
             return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
 
+        start_wl_hash = get_wl_hash(ranks_a, adj_a)
+        target_wl_hash = get_wl_hash(ranks_b, adj_b)
+        if start_wl_hash == target_wl_hash:
+            if get_isomorphism_mapping(ranks_a, adj_a, ranks_b, adj_b) is not None:
+                return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
+
         half_budget = max_steps // 2
 
         # Forward frontier: A → B
         fwd_visited = {
             start_hash: {"ranks": ranks_a, "adj": adj_a, "g_score": 0, "path": []}
         }
+        fwd_wl_map = defaultdict(list)
+        fwd_wl_map[start_wl_hash].append(start_hash)
         h_fwd = self.predictor.predict(ranks_a, adj_a, ranks_b, adj_b)["estimated_distance"]
         fwd_pq = []
         heapq.heappush(fwd_pq, (h_fwd, next(self.counter), (0, ranks_a, adj_a, [])))
@@ -297,6 +348,8 @@ class HeuristicBidirectionalPathfinder:
         bwd_visited = {
             target_hash: {"ranks": ranks_b, "adj": adj_b, "g_score": 0, "path": []}
         }
+        bwd_wl_map = defaultdict(list)
+        bwd_wl_map[target_wl_hash].append(target_hash)
         h_bwd = self.predictor.predict(ranks_b, adj_b, ranks_a, adj_a)["estimated_distance"]
         bwd_pq = []
         heapq.heappush(bwd_pq, (h_bwd, next(self.counter), (0, ranks_b, adj_b, [])))
@@ -320,6 +373,8 @@ class HeuristicBidirectionalPathfinder:
                     fwd_pq,
                     fwd_visited,
                     bwd_visited,
+                    fwd_wl_map,
+                    bwd_wl_map,
                     ranks_b,
                     adj_b,
                     half_budget,
@@ -331,6 +386,8 @@ class HeuristicBidirectionalPathfinder:
                     bwd_pq,
                     bwd_visited,
                     fwd_visited,
+                    bwd_wl_map,
+                    fwd_wl_map,
                     ranks_a,
                     adj_a,
                     half_budget,
@@ -341,9 +398,15 @@ class HeuristicBidirectionalPathfinder:
             total_visited = len(fwd_visited) + len(bwd_visited)
 
             if meeting is not None:
-                fwd_path = fwd_visited[meeting]["path"]
-                bwd_path = bwd_visited[meeting]["path"]
-                full_path = fwd_path + list(reversed(bwd_path))
+                fwd_md5, bwd_md5, mapping = meeting
+                fwd_node = fwd_visited[fwd_md5]
+                bwd_node = bwd_visited[bwd_md5]
+                fwd_path = fwd_node["path"]
+                bwd_path = bwd_node["path"]
+                
+                inv_mapping = {v: k for k, v in mapping.items()}
+                translated_bwd_path = [inv_mapping[k] for k in reversed(bwd_path)]
+                full_path = fwd_path + translated_bwd_path
                 return {
                     "path": full_path,
                     "visited_states": len(fwd_visited) + len(bwd_visited),
@@ -398,6 +461,12 @@ class AutoregressivePathfinder:
         if start_hash == target_hash:
             return {"status": "success", "path": [], "model_passes": 0, "visited_states": 1}
 
+        start_wl_hash = get_wl_hash(ranks_a, adj_a)
+        target_wl_hash = get_wl_hash(ranks_b, adj_b)
+        if start_wl_hash == target_wl_hash:
+            if get_isomorphism_mapping(ranks_a, adj_a, ranks_b, adj_b) is not None:
+                return {"status": "success", "path": [], "model_passes": 0, "visited_states": 1}
+
         visited = {start_hash: (ranks_a, adj_a, [])}
         model_passes = 0
         beam = [(0.0, start_hash, ranks_a, adj_a, [])]
@@ -432,17 +501,19 @@ class AutoregressivePathfinder:
                         continue
 
                     new_hash = get_graph_hash(new_ranks, new_adj)
+                    new_wl_hash = get_wl_hash(new_ranks, new_adj)
                     new_path = path + [node_k]
                     new_score = score + torch.log(p).item()
 
-                    if new_hash == target_hash:
-                        visited[new_hash] = (new_ranks, new_adj, new_path)
-                        return {
-                            "status": "success",
-                            "path": new_path,
-                            "model_passes": model_passes,
-                            "visited_states": len(visited),
-                        }
+                    if new_wl_hash == target_wl_hash:
+                        if get_isomorphism_mapping(new_ranks, new_adj, ranks_b, adj_b) is not None:
+                            visited[new_hash] = (new_ranks, new_adj, new_path)
+                            return {
+                                "status": "success",
+                                "path": new_path,
+                                "model_passes": model_passes,
+                                "visited_states": len(visited),
+                            }
 
                     if new_hash not in visited or len(new_path) < len(visited[new_hash][2]):
                         visited[new_hash] = (new_ranks, new_adj, new_path)
@@ -477,8 +548,8 @@ class HybridBidirectionalPathfinder:
         self.counter = itertools.count()
 
     def _expand_frontier(
-        self, pq, visited, other_visited, target_ranks, target_adj, target_batch, max_steps,
-        lambda_ar, top_k, enforce_anomaly_free=True,
+        self, pq, visited, other_visited, this_wl_map, other_wl_map, target_ranks, target_adj, target_batch, max_steps,
+        lambda_ar, top_k, enforce_anomaly_free=True, is_forward=True,
     ):
         if not pq:
             return None
@@ -489,8 +560,18 @@ class HybridBidirectionalPathfinder:
             return None
 
         c_hash = get_graph_hash(c_ranks, c_adj)
-        if c_hash in other_visited:
-            return c_hash
+        c_wl_hash = get_wl_hash(c_ranks, c_adj)
+        if c_wl_hash in other_wl_map:
+            for other_md5 in other_wl_map[c_wl_hash]:
+                other_node = other_visited[other_md5]
+                if is_forward:
+                    mapping = get_isomorphism_mapping(c_ranks, c_adj, other_node["ranks"], other_node["adj"])
+                else:
+                    mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], c_ranks, c_adj)
+                if mapping is not None:
+                    fwd_md5 = c_hash if is_forward else other_md5
+                    bwd_md5 = other_md5 if is_forward else c_hash
+                    return fwd_md5, bwd_md5, mapping
 
         # 1. Run AR model to get action probabilities
         data_c = self.ar_predictor.get_pyg_data(c_ranks, c_adj)
@@ -525,17 +606,6 @@ class HybridBidirectionalPathfinder:
 
             new_hash = get_graph_hash(new_ranks, new_adj)
             
-            # Immediate meeting check
-            if new_hash in other_visited:
-                if new_hash not in visited or g_score + 1 < visited[new_hash]["g_score"]:
-                    visited[new_hash] = {
-                        "ranks": new_ranks,
-                        "adj": new_adj,
-                        "g_score": g_score + 1,
-                        "path": path + [k],
-                    }
-                return new_hash
-
             if new_hash not in visited or g_score + 1 < visited[new_hash]["g_score"]:
                 visited[new_hash] = {
                     "ranks": new_ranks,
@@ -543,10 +613,26 @@ class HybridBidirectionalPathfinder:
                     "g_score": g_score + 1,
                     "path": path + [k],
                 }
+                new_wl_hash = get_wl_hash(new_ranks, new_adj)
+                this_wl_map[new_wl_hash].append(new_hash)
                 valid_mutants_ranks.append(new_ranks)
                 valid_mutants_adj.append(new_adj)
                 valid_mutants_k.append(k)
                 valid_mutants_p.append(p)
+
+                # Immediate meeting check
+                if new_wl_hash in other_wl_map:
+                    for other_md5 in other_wl_map[new_wl_hash]:
+                        other_node = other_visited[other_md5]
+                        if is_forward:
+                            mapping = get_isomorphism_mapping(new_ranks, new_adj, other_node["ranks"], other_node["adj"])
+                        else:
+                            mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], new_ranks, new_adj)
+                        
+                        if mapping is not None:
+                            fwd_md5 = new_hash if is_forward else other_md5
+                            bwd_md5 = other_md5 if is_forward else new_hash
+                            return fwd_md5, bwd_md5, mapping
 
         if not valid_mutants_ranks:
             return None
@@ -600,6 +686,12 @@ class HybridBidirectionalPathfinder:
         if start_hash == target_hash:
             return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
 
+        start_wl_hash = get_wl_hash(ranks_a, adj_a)
+        target_wl_hash = get_wl_hash(ranks_b, adj_b)
+        if start_wl_hash == target_wl_hash:
+            if get_isomorphism_mapping(ranks_a, adj_a, ranks_b, adj_b) is not None:
+                return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
+
         half_budget = max_steps // 2
         
         target_data_fwd = self.ar_predictor.get_pyg_data(ranks_b, adj_b)
@@ -612,6 +704,8 @@ class HybridBidirectionalPathfinder:
         fwd_visited = {
             start_hash: {"ranks": ranks_a, "adj": adj_a, "g_score": 0, "path": []}
         }
+        fwd_wl_map = defaultdict(list)
+        fwd_wl_map[start_wl_hash].append(start_hash)
         h_fwd = self.predictor.predict(ranks_a, adj_a, ranks_b, adj_b)["estimated_distance"]
         fwd_pq = []
         heapq.heappush(fwd_pq, (h_fwd, next(self.counter), (0, ranks_a, adj_a, [])))
@@ -620,6 +714,8 @@ class HybridBidirectionalPathfinder:
         bwd_visited = {
             target_hash: {"ranks": ranks_b, "adj": adj_b, "g_score": 0, "path": []}
         }
+        bwd_wl_map = defaultdict(list)
+        bwd_wl_map[target_wl_hash].append(target_hash)
         h_bwd = self.predictor.predict(ranks_b, adj_b, ranks_a, adj_a)["estimated_distance"]
         bwd_pq = []
         heapq.heappush(bwd_pq, (h_bwd, next(self.counter), (0, ranks_b, adj_b, [])))
@@ -639,23 +735,29 @@ class HybridBidirectionalPathfinder:
 
             if expand_fwd:
                 meeting = self._expand_frontier(
-                    fwd_pq, fwd_visited, bwd_visited,
+                    fwd_pq, fwd_visited, bwd_visited, fwd_wl_map, bwd_wl_map,
                     ranks_b, adj_b, target_batch_fwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free
+                    half_budget, lambda_ar, top_k, enforce_anomaly_free, True
                 )
             else:
                 meeting = self._expand_frontier(
-                    bwd_pq, bwd_visited, fwd_visited,
+                    bwd_pq, bwd_visited, fwd_visited, bwd_wl_map, fwd_wl_map,
                     ranks_a, adj_a, target_batch_bwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free
+                    half_budget, lambda_ar, top_k, enforce_anomaly_free, False
                 )
 
             total_visited = len(fwd_visited) + len(bwd_visited)
 
             if meeting is not None:
-                fwd_path = fwd_visited[meeting]["path"]
-                bwd_path = bwd_visited[meeting]["path"]
-                full_path = fwd_path + list(reversed(bwd_path))
+                fwd_md5, bwd_md5, mapping = meeting
+                fwd_node = fwd_visited[fwd_md5]
+                bwd_node = bwd_visited[bwd_md5]
+                fwd_path = fwd_node["path"]
+                bwd_path = bwd_node["path"]
+                
+                inv_mapping = {v: k for k, v in mapping.items()}
+                translated_bwd_path = [inv_mapping[k] for k in reversed(bwd_path)]
+                full_path = fwd_path + translated_bwd_path
                 return {
                     "path": full_path,
                     "visited_states": total_visited,
@@ -714,10 +816,10 @@ class HybridLCAPathfinder:
         self.counter = itertools.count()
 
     def _expand_frontier(
-        self, pq, visited, other_visited, target_ranks, target_adj, target_batch, max_steps,
+        self, pq, visited, other_visited, this_wl_map, other_wl_map, target_ranks, target_adj, target_batch, max_steps,
         lambda_ar, top_k, enforce_anomaly_free=True, initial_rank_sum=None,
         lambda_det_cost=0.0, lambda_siamese_h=1.0, lambda_lca_h=0.0,
-        cost_decrease=0.5, cost_equal=1.0, cost_increase=5.0
+        cost_decrease=0.5, cost_equal=1.0, cost_increase=5.0, is_forward=True
     ):
         if not pq:
             return None
@@ -728,8 +830,18 @@ class HybridLCAPathfinder:
             return None
 
         c_hash = get_graph_hash(c_ranks, c_adj)
-        if c_hash in other_visited:
-            return c_hash
+        c_wl_hash = get_wl_hash(c_ranks, c_adj)
+        if c_wl_hash in other_wl_map:
+            for other_md5 in other_wl_map[c_wl_hash]:
+                other_node = other_visited[other_md5]
+                if is_forward:
+                    mapping = get_isomorphism_mapping(c_ranks, c_adj, other_node["ranks"], other_node["adj"])
+                else:
+                    mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], c_ranks, c_adj)
+                if mapping is not None:
+                    fwd_md5 = c_hash if is_forward else other_md5
+                    bwd_md5 = other_md5 if is_forward else c_hash
+                    return fwd_md5, bwd_md5, mapping
 
         # 1. Run AR model to get action probabilities
         data_c = self.ar_predictor.get_pyg_data(c_ranks, c_adj)
@@ -764,17 +876,6 @@ class HybridLCAPathfinder:
 
             new_hash = get_graph_hash(new_ranks, new_adj)
             
-            # Immediate meeting check
-            if new_hash in other_visited:
-                if new_hash not in visited or g_score + 1 < visited[new_hash]["g_score"]:
-                    visited[new_hash] = {
-                        "ranks": new_ranks,
-                        "adj": new_adj,
-                        "g_score": g_score + 1,
-                        "path": path + [k],
-                    }
-                return new_hash
-
             if new_hash not in visited or g_score + 1 < visited[new_hash]["g_score"]:
                 visited[new_hash] = {
                     "ranks": new_ranks,
@@ -782,10 +883,26 @@ class HybridLCAPathfinder:
                     "g_score": g_score + 1,
                     "path": path + [k],
                 }
+                new_wl_hash = get_wl_hash(new_ranks, new_adj)
+                this_wl_map[new_wl_hash].append(new_hash)
                 valid_mutants_ranks.append(new_ranks)
                 valid_mutants_adj.append(new_adj)
                 valid_mutants_k.append(k)
                 valid_mutants_p.append(p)
+
+                # Immediate meeting check
+                if new_wl_hash in other_wl_map:
+                    for other_md5 in other_wl_map[new_wl_hash]:
+                        other_node = other_visited[other_md5]
+                        if is_forward:
+                            mapping = get_isomorphism_mapping(new_ranks, new_adj, other_node["ranks"], other_node["adj"])
+                        else:
+                            mapping = get_isomorphism_mapping(other_node["ranks"], other_node["adj"], new_ranks, new_adj)
+                        
+                        if mapping is not None:
+                            fwd_md5 = new_hash if is_forward else other_md5
+                            bwd_md5 = other_md5 if is_forward else new_hash
+                            return fwd_md5, bwd_md5, mapping
 
         if not valid_mutants_ranks:
             return None
@@ -868,6 +985,12 @@ class HybridLCAPathfinder:
         if start_hash == target_hash:
             return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
 
+        start_wl_hash = get_wl_hash(ranks_a, adj_a)
+        target_wl_hash = get_wl_hash(ranks_b, adj_b)
+        if start_wl_hash == target_wl_hash:
+            if get_isomorphism_mapping(ranks_a, adj_a, ranks_b, adj_b) is not None:
+                return {"path": [], "visited_states": 1, "status": "success", "model_passes": 0}
+
         half_budget = max_steps // 2
         
         target_data_fwd = self.ar_predictor.get_pyg_data(ranks_b, adj_b)
@@ -880,6 +1003,8 @@ class HybridLCAPathfinder:
         fwd_visited = {
             start_hash: {"ranks": ranks_a, "adj": adj_a, "g_score": 0, "path": []}
         }
+        fwd_wl_map = defaultdict(list)
+        fwd_wl_map[start_wl_hash].append(start_hash)
         h_siamese_fwd = self.predictor.predict(ranks_a, adj_a, ranks_b, adj_b)["estimated_distance"]
         initial_sum_a = sum(ranks_a)
         rank_penalty_fwd = sum(ranks_a) / initial_sum_a if initial_sum_a > 0 else 1.0
@@ -891,6 +1016,8 @@ class HybridLCAPathfinder:
         bwd_visited = {
             target_hash: {"ranks": ranks_b, "adj": adj_b, "g_score": 0, "path": []}
         }
+        bwd_wl_map = defaultdict(list)
+        bwd_wl_map[target_wl_hash].append(target_hash)
         h_siamese_bwd = self.predictor.predict(ranks_b, adj_b, ranks_a, adj_a)["estimated_distance"]
         initial_sum_b = sum(ranks_b)
         rank_penalty_bwd = sum(ranks_b) / initial_sum_b if initial_sum_b > 0 else 1.0
@@ -913,27 +1040,33 @@ class HybridLCAPathfinder:
 
             if expand_fwd:
                 meeting = self._expand_frontier(
-                    fwd_pq, fwd_visited, bwd_visited,
+                    fwd_pq, fwd_visited, bwd_visited, fwd_wl_map, bwd_wl_map,
                     ranks_b, adj_b, target_batch_fwd,
                     half_budget, lambda_ar, top_k, enforce_anomaly_free,
                     initial_sum_a, lambda_det_cost, lambda_siamese_h, lambda_lca_h,
-                    cost_decrease, cost_equal, cost_increase
+                    cost_decrease, cost_equal, cost_increase, True
                 )
             else:
                 meeting = self._expand_frontier(
-                    bwd_pq, bwd_visited, fwd_visited,
+                    bwd_pq, bwd_visited, fwd_visited, bwd_wl_map, fwd_wl_map,
                     ranks_a, adj_a, target_batch_bwd,
                     half_budget, lambda_ar, top_k, enforce_anomaly_free,
                     initial_sum_b, lambda_det_cost, lambda_siamese_h, lambda_lca_h,
-                    cost_decrease, cost_equal, cost_increase
+                    cost_decrease, cost_equal, cost_increase, False
                 )
 
             total_visited = len(fwd_visited) + len(bwd_visited)
 
             if meeting is not None:
-                fwd_path = fwd_visited[meeting]["path"]
-                bwd_path = bwd_visited[meeting]["path"]
-                full_path = fwd_path + list(reversed(bwd_path))
+                fwd_md5, bwd_md5, mapping = meeting
+                fwd_node = fwd_visited[fwd_md5]
+                bwd_node = bwd_visited[bwd_md5]
+                fwd_path = fwd_node["path"]
+                bwd_path = bwd_node["path"]
+                
+                inv_mapping = {v: k for k, v in mapping.items()}
+                translated_bwd_path = [inv_mapping[k] for k in reversed(bwd_path)]
+                full_path = fwd_path + translated_bwd_path
                 return {
                     "path": full_path,
                     "visited_states": total_visited,

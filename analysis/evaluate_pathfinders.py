@@ -10,6 +10,10 @@ import time
 import argparse
 import multiprocessing as mp
 from collections import defaultdict
+import hashlib
+import pickle
+import random
+import concurrent.futures
 import torch
 import pandas as pd
 import numpy as np
@@ -36,8 +40,337 @@ from pathfinders.find_path import (
     HybridLCAPathfinder
 )
 
-from src.data_utils import get_graph_hash
-from scripts.data_sampler import stream_sample, pyg_to_raw
+from src.data_utils import get_graph_hash, check_isomorphism
+
+# ---------------------------------------------------------------------------
+# Dataset streaming & conversion utilities (bundled internally for standalone operation)
+# ---------------------------------------------------------------------------
+
+def pyg_to_raw(data):
+    """
+    Reconstruct raw ranks (list) and dense adjacency (list of lists)
+    from a PyG Data object created by build_pyg_data().
+    """
+    ranks = [int(round(r)) for r in data.x[:, 0].tolist()]
+    n = len(ranks)
+
+    adj = [[0] * n for _ in range(n)]
+    if data.edge_index.numel() > 0:
+        rows = data.edge_index[0].tolist()
+        cols = data.edge_index[1].tolist()
+        weights = data.edge_attr.view(-1).tolist()
+        for r, c, w in zip(rows, cols, weights):
+            adj[r][c] = int(round(w))
+
+    return ranks, adj
+
+
+def _cache_path_for(test_dir):
+    """Return the evaluation cache file path for a test directory."""
+    return os.path.join(test_dir, "_eval_cache.pkl")
+
+
+def _chunk_fingerprint(chunk_files):
+    """Deterministic fingerprint of chunk filenames + modification times."""
+    h = hashlib.md5()
+    for fp in sorted(chunk_files):
+        h.update(fp.encode("utf-8"))
+        try:
+            h.update(str(os.path.getmtime(fp)).encode("utf-8"))
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
+def _load_cache(cache_path, expected_fp):
+    """Load and validate a cache file. Returns (count, items) or None."""
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "rb") as f:
+            obj = pickle.load(f)
+        if obj.get("fingerprint") == expected_fp:
+            return obj["count"], obj["items"]
+    except Exception:
+        pass
+    return None
+
+
+def _build_and_save_cache(chunk_files, cache_path, fingerprint):
+    """
+    Read all PyG .pt chunks for one bucket, convert to raw Python,
+    and save as a single .pkl file.
+
+    Each cached item is a 7-tuple:
+        (ranks_a, adj_a, ranks_b, adj_b, dist, path, family_id)
+    """
+    items = []
+    for chunk_path in chunk_files:
+        try:
+            chunk_data = torch.load(chunk_path, map_location="cpu", weights_only=False)
+            for g_a, g_b, true_dist, true_path in chunk_data:
+                ranks_a, adj_a = pyg_to_raw(g_a)
+                ranks_b, adj_b = pyg_to_raw(g_b)
+                family_id = getattr(g_a, "family_id", None)
+                items.append(
+                    (ranks_a, adj_a, ranks_b, adj_b, float(true_dist), true_path, family_id)
+                )
+            del chunk_data
+        except Exception as e:
+            print(f"  [!] Cache build error {chunk_path}: {e}")
+    obj = {"fingerprint": fingerprint, "count": len(items), "items": items}
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as e:
+        print(f"  [!] Cache write error {cache_path}: {e}")
+    return len(items), items
+
+
+def _get_cached_items(chunk_files, rebuild=False):
+    """
+    Return (count, items) for a bucket, building the cache on first call.
+    Items are 7-tuples of plain Python data (no PyG objects).
+    """
+    if not chunk_files:
+        return 0, []
+    test_dir = os.path.dirname(chunk_files[0])
+    cache_path = _cache_path_for(test_dir)
+    fingerprint = _chunk_fingerprint(chunk_files)
+
+    if not rebuild:
+        cached = _load_cache(cache_path, fingerprint)
+        if cached is not None:
+            return cached
+
+    return _build_and_save_cache(chunk_files, cache_path, fingerprint)
+
+
+def _get_bucket_chunk_files(dataset_root, node_groups, unrelated_only=False, distances=None):
+    """
+    Returns an ordered dict: {(nodes, dist): [chunk_path, ...]}
+    (does NOT load any data).
+    """
+    bucket_chunks = {}
+    for nodes in node_groups:
+        node_dir = os.path.join(dataset_root, str(nodes))
+        if not os.path.isdir(node_dir):
+            continue
+            
+        if unrelated_only:
+            test_dir = os.path.join(node_dir, "dist_NaN", "test")
+            if os.path.isdir(test_dir):
+                chunk_files = sorted(
+                    os.path.join(test_dir, f)
+                    for f in os.listdir(test_dir)
+                    if f.endswith(".pt")
+                )
+                if chunk_files:
+                    bucket_chunks[(nodes, "NaN")] = chunk_files
+            continue
+
+        dist_dirs = sorted(
+            [
+                d
+                for d in os.listdir(node_dir)
+                if d.startswith("dist_") and d != "dist_NaN" and os.path.isdir(os.path.join(node_dir, d))
+            ]
+        )
+        for dist_dir_name in dist_dirs:
+            try:
+                dist_val = int(dist_dir_name.split("_")[1])
+            except (ValueError, IndexError):
+                continue
+            if dist_val == 0:
+                continue
+            
+            if distances is not None and dist_val not in distances:
+                continue
+
+            test_dir = os.path.join(node_dir, dist_dir_name, "test")
+            if not os.path.isdir(test_dir):
+                continue
+            chunk_files = sorted(
+                os.path.join(test_dir, f)
+                for f in os.listdir(test_dir)
+                if f.endswith(".pt")
+            )
+            if chunk_files:
+                bucket_chunks[(nodes, dist_val)] = chunk_files
+    return bucket_chunks
+
+
+def _count_bucket_pairs(chunk_files):
+    """Pass 1: count total pairs in a bucket without retaining any data."""
+    total = 0
+    for chunk_path in chunk_files:
+        try:
+            chunk_data = torch.load(chunk_path, map_location="cpu", weights_only=False)
+            total += len(chunk_data)
+            del chunk_data  # free immediately
+        except Exception as e:
+            print(f"  [!] Count error {chunk_path}: {e}")
+    return total
+
+
+def _reservoir_sample(chunk_files, k, rng):
+    """
+    Pass 2: reservoir sample k items from a bucket, streaming one chunk at a time.
+    Uses Knuth's Algorithm R — peak RAM = one chunk + k reservoir items.
+    """
+    reservoir = []
+    n_seen = 0
+    for chunk_path in chunk_files:
+        try:
+            chunk_data = torch.load(chunk_path, map_location="cpu", weights_only=False)
+        except Exception as e:
+            print(f"  [!] Load error {chunk_path}: {e}")
+            continue
+        for item in chunk_data:
+            n_seen += 1
+            if len(reservoir) < k:
+                reservoir.append(item)
+            else:
+                j = rng.randint(0, n_seen - 1)
+                if j < k:
+                    reservoir[j] = item
+        del chunk_data  # free as soon as the chunk is processed
+    return reservoir
+
+
+def stream_sample(
+    dataset_root,
+    node_groups,
+    seed=42,
+    use_all=False,
+    fraction=0.01,
+    min_sample=400,
+    max_sample=5000,
+    unrelated_only=False,
+    num_workers=1,
+    use_cache=True,
+    rebuild_cache=False,
+    distances=None,
+):
+    """
+    Two-pass streaming proportional sampler.
+    """
+    rng = random.Random(seed)
+    bucket_chunks = _get_bucket_chunk_files(dataset_root, node_groups, unrelated_only, distances=distances)
+
+    # ---- Fast cached path: loads plain Python instead of PyG objects ----
+    if use_cache:
+        cache_label = "rebuilding" if rebuild_cache else "loading"
+        print(f"  Evaluation cache ({cache_label}, {num_workers} workers)...")
+        counts = {}
+        sampled = {}
+
+        def _load_or_build(key_chunk):
+            key, chunk_files = key_chunk
+            return key, chunk_files, _get_cached_items(chunk_files, rebuild=rebuild_cache)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            for key, chunk_files, (count, all_items) in executor.map(
+                _load_or_build, bucket_chunks.items()
+            ):
+                counts[key] = count
+                nodes, dist_val = key
+                cache_path = _cache_path_for(os.path.dirname(chunk_files[0]))
+                is_fresh = rebuild_cache or not os.path.exists(cache_path)
+
+                if use_all:
+                    sampled[key] = all_items
+                    print(f"    ({nodes} nodes, dist {dist_val}): {count} pairs (all)")
+                else:
+                    if count == 0:
+                        sampled[key] = []
+                    else:
+                        k = int(round(fraction * count))
+                        k = max(min_sample, min(k, max_sample))
+                        k = min(k, count)
+                        local_rng = random.Random(seed + hash(key))
+                        sampled[key] = local_rng.sample(all_items, k)
+                        del all_items
+                    pct = 100 * len(sampled[key]) / count if count else 0
+                    tag = "built" if is_fresh else "cached"
+                    print(
+                        f"    ({nodes} nodes, dist {dist_val}): "
+                        f"sampled {len(sampled[key])}/{count}  ({pct:.1f}%)  [{tag}]"
+                    )
+        return counts, sampled
+
+    # ---- Non-cached legacy path (streams PyG objects) ----
+    if use_all:
+        print(f"  Mode: ALL pairs (streaming, {num_workers} workers)...")
+        counts = {}
+        sampled = {}
+        
+        def process_bucket_all(key_chunk):
+            key, chunk_files = key_chunk
+            items = []
+            for chunk_path in chunk_files:
+                try:
+                    chunk_data = torch.load(
+                        chunk_path, map_location="cpu", weights_only=False
+                    )
+                    items.extend(chunk_data)
+                except Exception as e:
+                    print(f"  [!] Load error {chunk_path}: {e}")
+            return key, items
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            for key, items in executor.map(process_bucket_all, bucket_chunks.items()):
+                counts[key] = len(items)
+                sampled[key] = items
+                nodes, dist_val = key
+                print(f"    ({nodes} nodes, dist {dist_val}): {len(items)} pairs (all)")
+        return counts, sampled
+
+    # --- Pass 1: count ---
+    print(f"  Pass 1/2: counting pairs per bucket ({num_workers} workers)...")
+    counts = {}
+    
+    def count_bucket(key_chunk):
+        key, chunk_files = key_chunk
+        return key, _count_bucket_pairs(chunk_files)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for key, n in executor.map(count_bucket, bucket_chunks.items()):
+            counts[key] = n
+            nodes, dist_val = key
+            print(f"    ({nodes} nodes, dist {dist_val}): {n} pairs")
+
+    # --- Pass 2: proportional reservoir sample ---
+    print(
+        f"  Pass 2/2: reservoir sampling ({num_workers} workers) "
+        f"clamp({fraction*100:.1f}% · N, {min_sample}, {max_sample}) per bucket..."
+    )
+    sampled = {}
+    
+    def sample_bucket(key_chunk):
+        key, chunk_files = key_chunk
+        n_total = counts[key]
+        if n_total == 0:
+            return key, []
+        k = int(round(fraction * n_total))
+        k = max(min_sample, min(k, max_sample))
+        k = min(k, n_total)
+        local_rng = random.Random(seed + hash(key))
+        items = _reservoir_sample(chunk_files, k, local_rng)
+        return key, items, n_total
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for key, items, n_total in executor.map(sample_bucket, bucket_chunks.items()):
+            sampled[key] = items
+            nodes, dist_val = key
+            pct = 100 * len(items) / n_total if n_total else 0
+            print(
+                f"    ({nodes} nodes, dist {dist_val}): "
+                f"sampled {len(items)}/{n_total}  ({pct:.1f}%)"
+            )
+
+    return counts, sampled
+
 
 def count_valid_mutations(ranks, adj, enforce_anomaly_free=True):
     from src.data_utils import mutate_ranks
@@ -141,9 +474,9 @@ def _worker_eval(task):
                 path_is_valid = None
                 if path is not None:
                     final_ranks, final_adj = replay_path(ranks_a, adj_a, path, enforce_anomaly_free=enforce_anomaly_free)
-                    path_is_valid = (final_ranks is not None and get_graph_hash(final_ranks, final_adj) == get_graph_hash(ranks_b, adj_b))
+                    path_is_valid = (final_ranks is not None and check_isomorphism(final_ranks, final_adj, ranks_b, adj_b))
                 
-                results[f"{model_key}_result"] = {
+                result_dict = {
                     "status": res.get("status"),
                     "predicted_path": path,
                     "predicted_distance": len(path) if path is not None else None,
@@ -154,6 +487,14 @@ def _worker_eval(task):
                     "model_passes": res.get("model_passes", 0),
                     "hyperparameters": hyperparams
                 }
+                if "initial_h_score" in res and res["initial_h_score"] is not None:
+                    result_dict["initial_h_score"] = res["initial_h_score"]
+                elif "initial_h_fwd" in res and res["initial_h_fwd"] is not None:
+                    result_dict["initial_h_score"] = res["initial_h_fwd"]
+                for metric_key in ["fwd_nodes", "bwd_nodes", "meeting_depth_fwd", "meeting_depth_bwd"]:
+                    if metric_key in res and res[metric_key] is not None:
+                        result_dict[metric_key] = res[metric_key]
+                results[f"{model_key}_result"] = result_dict
             except Exception as e:
                 results[f"{model_key}_result"] = {
                     "status": "error",
@@ -176,17 +517,18 @@ def _worker_eval(task):
         {"lambda_ar": args.lambda_ar, "top_k": args.top_k}
     )
     evaluate_model("lca",
-        lambda: _WORKERS["lca"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, enforce_anomaly_free=enforce_anomaly_free),
-        {}
+        lambda: _WORKERS["lca"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps_lca, enforce_anomaly_free=enforce_anomaly_free),
+        {"max_steps": args.max_steps_lca}
     )
     evaluate_model("hybrid_lca",
         lambda: _WORKERS["hybrid_lca"].find_path(
-            ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free,
+            ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps_lca, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free,
             lambda_ar=args.lambda_ar, top_k=args.top_k,
             lambda_det_cost=args.lambda_det_cost, lambda_siamese_h=args.lambda_siamese_h, lambda_lca_h=args.lambda_lca_h,
             cost_decrease=args.cost_decrease, cost_equal=args.cost_equal, cost_increase=args.cost_increase
         ),
         {
+            "max_steps": args.max_steps_lca,
             "lambda_ar": args.lambda_ar, "top_k": args.top_k,
             "lambda_det_cost": args.lambda_det_cost, "lambda_siamese_h": args.lambda_siamese_h, "lambda_lca_h": args.lambda_lca_h,
             "cost_decrease": args.cost_decrease, "cost_equal": args.cost_equal, "cost_increase": args.cost_increase
@@ -606,6 +948,7 @@ if __name__ == "__main__":
     parser.add_argument("--datasets", type=str, nargs="+", default=["Databases/Theories_dataset"])
     parser.add_argument("--output_dir", type=str, default="results_unified")
     parser.add_argument("--max_steps", type=int, default=30)
+    parser.add_argument("--max_steps_lca", "--max_steps_det", type=int, default=1000, dest="max_steps_lca", help="Maximum search steps for LCA / deterministic models")
     parser.add_argument("--max_nodes", type=int, default=100000)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--nodes", type=int, nargs="+", default=None)

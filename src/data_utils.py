@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import random
 import math
+import networkx as nx
 
 from torch_geometric.data import Data
 
@@ -497,6 +498,68 @@ def is_connected(adj_matrix):
                 visited[neighbors] = True
                 queue.append(neighbors)
     return all(visited)
+
+
+def _to_nx_graph(ranks, adj):
+    """Convert ranks and adjacency matrix to networkx DiGraph with node attributes."""
+    G = nx.DiGraph()
+    n = len(ranks)
+    for i in range(n):
+        G.add_node(i, rank=int(ranks[i]))
+    for i in range(n):
+        for j in range(n):
+            if adj[i][j] != 0:
+                G.add_edge(i, j, weight=int(adj[i][j]))
+    return G
+
+
+def get_wl_hash(ranks, adj):
+    """
+    Computes a Weisfeiler-Lehman graph hash for a quiver, which is invariant
+    under node permutations (isomorphisms).
+    """
+    G = _to_nx_graph(ranks, adj)
+    import warnings
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            h = nx.weisfeiler_lehman_graph_hash(G, node_attr='rank', edge_attr='weight')
+    except TypeError:
+        # Fallback if edge_attr is not supported in the installed networkx version
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            h = nx.weisfeiler_lehman_graph_hash(G, node_attr='rank')
+    return h
+
+
+def check_isomorphism(r1, a1, r2, a2):
+    """Check if two quivers are isomorphic (same structure and ranks)."""
+    if len(r1) != len(r2):
+        return False
+    G1 = _to_nx_graph(r1, a1)
+    G2 = _to_nx_graph(r2, a2)
+    nm = nx.algorithms.isomorphism.categorical_node_match('rank', -1)
+    em = nx.algorithms.isomorphism.categorical_edge_match('weight', 0)
+    return nx.is_isomorphic(G1, G2, node_match=nm, edge_match=em)
+
+
+def get_isomorphism_mapping(r1, a1, r2, a2):
+    """
+    Returns the mapping from nodes of quiver 1 to quiver 2, if they are isomorphic.
+    Mapping is a dict mapping node index in G1 to node index in G2.
+    Returns None if not isomorphic.
+    """
+    if len(r1) != len(r2):
+        return None
+    G1 = _to_nx_graph(r1, a1)
+    G2 = _to_nx_graph(r2, a2)
+    nm = nx.algorithms.isomorphism.categorical_node_match('rank', -1)
+    em = nx.algorithms.isomorphism.categorical_edge_match('weight', 0)
+    GM = nx.algorithms.isomorphism.DiGraphMatcher(G1, G2, node_match=nm, edge_match=em)
+    if GM.is_isomorphic():
+        return GM.mapping
+    return None
+
 
 if __name__ == "__main__":
     try:

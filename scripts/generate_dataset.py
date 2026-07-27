@@ -1,4 +1,15 @@
 import os
+
+# ---------------------------------------------------------------------------
+# Disable BLAS/OpenMP multithreading to prevent deadlocks when forking
+# Must be executed BEFORE importing numpy, scipy, or torch
+# ---------------------------------------------------------------------------
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import argparse
 import json
 import random
@@ -10,7 +21,7 @@ import gc
 import uuid
 import hashlib
 from numba import njit
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, dok_matrix
 from scipy.sparse.csgraph import shortest_path
 from torch_geometric.data import Data
 from collections import defaultdict
@@ -157,11 +168,16 @@ def get_family_id(sig, mapping, name="Unknown"):
 
 
 def get_exact_state(ranks, adj):
-    ranks_tuple = tuple(int(r) for r in ranks)
-    adj_tuple = tuple(tuple(int(a) for a in row) for row in adj)
+    if not ranks.flags['C_CONTIGUOUS'] or ranks.dtype != np.int64:
+        ranks = np.ascontiguousarray(ranks, dtype=np.int64)
+    if not adj.flags['C_CONTIGUOUS'] or adj.dtype != np.int64:
+        adj = np.ascontiguousarray(adj, dtype=np.int64)
+    
     m = hashlib.md5()
-    m.update(str((ranks_tuple, adj_tuple)).encode("utf-8"))
+    m.update(ranks.view(np.uint8))
+    m.update(adj.view(np.uint8))
     cert = m.digest()
+    
     return cert, ranks, adj
 
 
@@ -271,7 +287,7 @@ def worker_extract_paths_zero_copy(args_tuple):
                         prev = pred_array[curr]
                         if prev < 0:
                             break
-                        path.append(edge_mutations[(prev, curr)])
+                        path.append(edge_mutations[prev, curr])
                         curr = prev
                     path.reverse()
 
@@ -472,7 +488,7 @@ def main():
             # --- PHASE 1: BFS ---
             with mp.Pool(processes=args.num_workers) as pool_bfs:
                 for depth in range(args.bfs_depth):
-                    chunk_size = max(1, len(current_queue) // (args.num_workers * 2))
+                    chunk_size = max(100, min(10000, len(current_queue) // (args.num_workers * 4)))
                     tasks = []
                     for i in range(0, len(current_queue), chunk_size):
                         batch_keys = current_queue[i : i + chunk_size]
@@ -518,15 +534,20 @@ def main():
             col_idx = [byte_to_idx[v] for u, v, _ in edges_list]
             data = np.ones(len(edges_list))
 
-            edge_mutations = {}
+            edge_mutations = dok_matrix((n_states, n_states), dtype=np.int64)
             for u, v, mut in edges_list:
                 i, j = byte_to_idx[u], byte_to_idx[v]
-                edge_mutations[(i, j)] = mut
-                edge_mutations[(j, i)] = mut
+                edge_mutations[i, j] = mut
+                edge_mutations[j, i] = mut
 
             adj_sparse = coo_matrix(
                 (data, (row_idx, col_idx)), shape=(n_states, n_states)
             ).tocsr()
+
+            # Mark underlying arrays as read-only to physically prevent CoW in RAM
+            adj_sparse.data.flags.writeable = False
+            adj_sparse.indices.flags.writeable = False
+            adj_sparse.indptr.flags.writeable = False
             dist_from_root_array = shortest_path(
                 csgraph=adj_sparse,
                 directed=False,
@@ -563,7 +584,13 @@ def main():
                             chunk_counters[split][d] = max(ids) + 1
 
             all_sources = np.random.permutation(n_states)
-            batch_size = 500
+
+            if target_nodes >= 13:
+                batch_size = 20
+            elif target_nodes == 12:
+                batch_size = 50
+            else:
+                batch_size = 500
 
             apsp_tasks = []
             for start_idx in range(0, n_states, batch_size):
@@ -660,12 +687,11 @@ def main():
                         ):
                             all_dists_done = False
 
-                    # Aggressive shutdown if the exact target has been reached in every bucket
+                    # Clean exit from pool if the exact target has been reached in every bucket
                     if all_dists_done:
                         print(
-                            "    -> Exact limit reached for all distances! Immediate termination of queued workers."
+                            "    -> Exact limit reached for all distances! Clean exit from worker pool."
                         )
-                        pool_apsp.terminate()
                         break
 
             # Save remaining items in buffers
@@ -697,6 +723,7 @@ def main():
                 dist_from_root_array,
                 adj_sparse,
                 apsp_tasks,
+                edge_mutations,
             )
             gc.collect()
 

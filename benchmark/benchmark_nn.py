@@ -346,6 +346,189 @@ def evaluate_monotonicity(batch_pairs, parent_preds, model, device):
         
     return mono_results
 
+
+def get_checkpoint_hidden_channels(state_dict, fallback_dim, model_name="Model"):
+    """Inspect state_dict to auto-detect hidden_channels."""
+    if isinstance(state_dict, dict):
+        sd = state_dict.get("model_state_dict", state_dict)
+        for key in ["node_proj.weight", "encoders.0.conv.lin_l.weight", "encoders.0.conv.bias"]:
+            if key in sd and hasattr(sd[key], "shape"):
+                detected_dim = sd[key].shape[0]
+                if fallback_dim is not None and detected_dim != fallback_dim:
+                    print(f"[{model_name}] Note: Checkpoint hidden_channels ({detected_dim}) overrides CLI argument ({fallback_dim}).")
+                elif fallback_dim is None:
+                    print(f"[{model_name}] Auto-detected hidden_channels={detected_dim} from checkpoint.")
+                return detected_dim
+    return fallback_dim if fallback_dim is not None else 128
+
+
+def pyg_to_ranks_adj(data):
+    """Extract (ranks, adj_matrix) from a PyG Data object."""
+    import numpy as np
+    num_nodes = data.num_nodes
+    ranks = data.x[:, 0].cpu().numpy().astype(np.int64).tolist()
+    adj = np.zeros((num_nodes, num_nodes), dtype=np.int64)
+    if data.edge_index.numel() > 0:
+        row, col = data.edge_index.cpu().numpy()
+        attr = data.edge_attr.cpu().numpy().flatten().astype(np.int64)
+        adj[row, col] = attr
+    return ranks, adj.tolist()
+
+
+def permute_siamese_graph(data):
+    """Apply a random node permutation to a PyG Data object for Siamese evaluation (no PE)."""
+    import torch
+    from torch_geometric.data import Data
+    N = data.num_nodes
+    perm = torch.randperm(N, device=data.x.device)
+    inv_perm = torch.argsort(perm)
+    new_x = data.x[perm]
+    if data.edge_index.numel() > 0:
+        new_edge_index = inv_perm[data.edge_index]
+    else:
+        new_edge_index = data.edge_index.clone()
+    return Data(
+        x=new_x,
+        edge_index=new_edge_index,
+        edge_attr=data.edge_attr.clone() if data.edge_attr is not None else None,
+        num_nodes=N,
+    )
+
+
+def evaluate_deterministic_and_permutation(batch_pairs, dist_pred, model, device, max_deter_steps=1000):
+    """
+    Evaluates 3-way distance benchmark (Siamese d_pred vs Database d_data vs Deterministic d_true)
+    and permutation invariance under node relabeling on the exact same test pairs.
+    """
+    import torch
+    from torch_geometric.data import Batch
+    from pathfinders.find_path import LCAPathfinder
+
+    pathfinder = LCAPathfinder()
+    perm_a_list = []
+    perm_b_list = []
+
+    for g_a, g_b, true_d, nc, fid in batch_pairs:
+        perm_a_list.append(permute_siamese_graph(g_a))
+        perm_b_list.append(permute_siamese_graph(g_b))
+
+    batch_a_perm = Batch.from_data_list(perm_a_list).to(device)
+    batch_b_perm = Batch.from_data_list(perm_b_list).to(device)
+
+    with torch.no_grad():
+        dist_perm = model(batch_a_perm, batch_b_perm).view(-1).cpu().numpy()
+
+    results = []
+    for j, (g_a, g_b, true_d, nc, fid) in enumerate(batch_pairs):
+        pred_d = float(dist_pred[j])
+        perm_d = float(dist_perm[j])
+        delta_perm = abs(pred_d - perm_d)
+
+        ranks_a, adj_a = pyg_to_ranks_adj(g_a)
+        ranks_b, adj_b = pyg_to_ranks_adj(g_b)
+
+        res = pathfinder.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=max_deter_steps, enforce_anomaly_free=True)
+        if res["status"] == "success":
+            deter_d = len(res["path"])
+            status_str = "success"
+        else:
+            deter_d = int(true_d)  # fallback if search didn't converge within max_steps
+            status_str = res["status"]
+
+        results.append({
+            "node_count": nc,
+            "database_distance": int(true_d),
+            "deterministic_distance": deter_d,
+            "predicted_distance": round(pred_d, 4),
+            "permuted_predicted_distance": round(perm_d, 4),
+            "delta_perm": round(delta_perm, 6),
+            "mae_database": round(abs(pred_d - float(true_d)), 4),
+            "mae_deterministic": round(abs(pred_d - float(deter_d)), 4),
+            "deter_status": status_str,
+            "family_uuid": fid,
+        })
+    return results
+
+
+def _process_deterministic_benchmark(df_deter, args):
+    """Save detailed/summary CSVs and generate plots for 3-way distance and permutation benchmark."""
+    import os
+    import pandas as pd
+    import numpy as np
+
+    output_dir = args.output_dir
+    detailed_csv = os.path.join(output_dir, "siamese_deterministic_benchmark_detailed.csv")
+    df_deter.to_csv(detailed_csv, index=False)
+    print(f"\nDetailed 3-way deterministic benchmark saved to {detailed_csv}")
+
+    df_succ = df_deter[df_deter["deter_status"] == "success"].copy()
+    if df_succ.empty:
+        df_succ = df_deter.copy()
+        print("  [Warning] No pairs succeeded in deterministic solver; summarizing all pairs.")
+
+    overestimates = (df_succ["deterministic_distance"] < df_succ["database_distance"]).sum()
+    total_succ = len(df_succ)
+    over_pct = (overestimates / total_succ * 100) if total_succ > 0 else 0.0
+
+    print("\n" + "=" * 60)
+    print("3-WAY DETERMINISTIC & PERMUTATION BENCHMARK SUMMARY")
+    print("=" * 60)
+    print(f"Total evaluated pairs (solver success): {total_succ} / {len(df_deter)}")
+    print(f"Database overestimation rate (d_true < d_data): {overestimates} ({over_pct:.2f}%)")
+    if overestimates > 0:
+        avg_red = (df_succ["database_distance"] - df_succ["deterministic_distance"])[df_succ["deterministic_distance"] < df_succ["database_distance"]].mean()
+        print(f"Average distance reduction when overestimated: {avg_red:.2f} steps")
+
+    mae_data = df_succ["mae_database"].mean()
+    mae_deter = df_succ["mae_deterministic"].mean()
+    mean_delta = df_succ["delta_perm"].mean()
+    max_delta = df_succ["delta_perm"].max()
+
+    print(f"Overall MAE vs Database (d_data):       {mae_data:.4f}")
+    print(f"Overall MAE vs Deterministic (d_true):  {mae_deter:.4f}")
+    print(f"Permutation Invariance Shift (mean):    {mean_delta:.6f} (max: {max_delta:.6f})")
+    print("=" * 60)
+
+    summary_rows = []
+    for d in sorted(df_succ["database_distance"].unique()):
+        sub = df_succ[df_succ["database_distance"] == d]
+        summary_rows.append({
+            "database_distance": d,
+            "count": len(sub),
+            "mae_vs_database": round(sub["mae_database"].mean(), 4),
+            "mae_vs_deterministic": round(sub["mae_deterministic"].mean(), 4),
+            "overestimate_rate_pct": round((sub["deterministic_distance"] < sub["database_distance"]).mean() * 100, 2),
+            "mean_perm_shift": round(sub["delta_perm"].mean(), 6),
+            "max_perm_shift": round(sub["delta_perm"].max(), 6),
+        })
+    df_sum = pd.DataFrame(summary_rows)
+    summary_csv = os.path.join(output_dir, "siamese_deterministic_benchmark_summary.csv")
+    df_sum.to_csv(summary_csv, index=False)
+    print(f"Summary statistics saved to {summary_csv}")
+
+    try:
+        jp_full = JHEPPlot(intextwidth=6.6155, usetex=True, fontsize=11)
+        jp_045 = JHEPPlot(intextwidth=6.6155, usetex=True, fontsize=11)
+    except Exception:
+        jp_full = JHEPPlot(usetex=False, fontsize=11)
+        jp_045 = JHEPPlot(usetex=False, fontsize=11)
+
+    for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
+        if is_045 and not getattr(args, "make_pdf", False):
+            continue
+        jp = InterceptJP(raw_jp, is_045, make_pdf=getattr(args, "make_pdf", False))
+        wl = not is_045
+        fig, ax = jp.create_figure()
+        ax.plot(df_sum["database_distance"], df_sum["mae_vs_database"], "o-", label="MAE vs Database ($d_{\\rm data}$)")
+        ax.plot(df_sum["database_distance"], df_sum["mae_vs_deterministic"], "s--", label="MAE vs Deterministic ($d_{\\rm true}$)")
+        ax.set_xlabel("Database Distance ($d_{\\rm data}$)")
+        ax.set_ylabel("Mean Absolute Error")
+        if wl:
+            ax.set_title("Siamese MAE: Database vs. Deterministic Shortest Path")
+        jp.add_legend(ax=ax)
+        jp.save(os.path.join(output_dir, "siamese_mae_comparison"))
+
+
 def run_inference(args):
     """Run model on all test pairs, save predictions CSV, generate plots."""
     import torch
@@ -354,9 +537,12 @@ def run_inference(args):
 
     print(f"Loading model from {args.checkpoint}...")
     device = torch.device("cpu")
-    model = SiameseSeiberg(hidden_channels=args.hidden_channels_ar_siamese_siamese)
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    dim_fallback = getattr(args, "hidden_channels_siamese", 64)
+    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "Siamese")
+    model = SiameseSeiberg(hidden_channels=hidden_dim)
+    model.load_state_dict(state_dict, strict=False)
     model.to(device).eval()
 
     # Detect node groups
@@ -373,6 +559,7 @@ def run_inference(args):
     os.makedirs(args.output_dir, exist_ok=True)
     results = []
     mono_results_all = []
+    deter_results_all = []
     embeddings_a, embeddings_b, embed_meta = [], [], []
     batch_size = 64
 
@@ -395,6 +582,11 @@ def run_inference(args):
             if args.evaluate_monotonicity_siamese:
                 mono_batch = evaluate_monotonicity(batch_pairs, dist_pred, model, device)
                 mono_results_all.extend(mono_batch)
+
+            if getattr(args, "evaluate_deterministic_benchmark_siamese", False) or getattr(args, "evaluate_deterministic_benchmark", False):
+                max_steps = getattr(args, "max_deter_steps_siamese", None) or getattr(args, "max_deter_steps", 1000)
+                deter_batch = evaluate_deterministic_and_permutation(batch_pairs, dist_pred, model, device, max_steps)
+                deter_results_all.extend(deter_batch)
 
             # Optionally extract embeddings
             if args.extract_embeddings_siamese:
@@ -445,6 +637,10 @@ def run_inference(args):
         
     if args.evaluate_monotonicity_siamese and not df_mono.empty:
         _generate_monotonicity_plots(df_mono, args)
+
+    if (getattr(args, "evaluate_deterministic_benchmark_siamese", False) or getattr(args, "evaluate_deterministic_benchmark", False)) and deter_results_all:
+        df_deter = pd.DataFrame(deter_results_all)
+        _process_deterministic_benchmark(df_deter, args)
 
     # Summary stats
     _print_summary(df, df_mono, args.output_dir)
@@ -733,9 +929,12 @@ def run_siamese_latency_benchmark(args):
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    model = SiameseSeiberg(hidden_channels=args.hidden_channels_ar)
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    dim_fallback = getattr(args, "hidden_channels_siamese", 64)
+    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "Siamese")
+    model = SiameseSeiberg(hidden_channels=hidden_dim)
+    model.load_state_dict(state_dict, strict=False)
     model.to(device).eval()
 
     def make_dummy(n_nodes=3):
@@ -1486,6 +1685,8 @@ if __name__ == "__main__":
     parser.add_argument("--extract_embeddings_siamese", action="store_true", help="Extract embeddings for t-SNE visualization (Siamese only)")
     parser.add_argument("--evaluate_monotonicity_siamese", action="store_true", help="Evaluate heuristic triangle inequality (Siamese only)")
     parser.add_argument("--benchmark_latency_siamese", action="store_true", help="Run latency benchmark only (no dataset needed, Siamese only)")
+    parser.add_argument("--evaluate_deterministic_benchmark_siamese", "--evaluate_deterministic_benchmark", dest="evaluate_deterministic_benchmark_siamese", action="store_true", help="Evaluate 3-way distance benchmark and permutation invariance (Siamese only)")
+    parser.add_argument("--max_deter_steps_siamese", "--max_deter_steps", dest="max_deter_steps_siamese", type=int, default=1000, help="Max steps for deterministic LCAPathfinder in 3-way benchmark")
     
     # AR Specific
     parser.add_argument("--only_inference_ar", action="store_true", help="Run only hardware inference benchmark (AR only)")
@@ -1520,12 +1721,25 @@ if __name__ == "__main__":
         args_a.output_dir = ar_out
         
         device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
-        model = AutoregressiveGPS(hidden_channels=args.hidden_channels_ar).to(device)
         try:
             ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-            model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
+            state_dict = ckpt.get("model_state_dict", ckpt)
         except Exception as e:
             print(f"Warning: Loading AR checkpoint failed: {e}")
+            state_dict = {}
+
+        hidden_dim = get_checkpoint_hidden_channels(state_dict, args.hidden_channels_ar, "Autoregressive")
+        use_delta_a = True
+        classifier_weight = state_dict.get('classifier.0.weight') if isinstance(state_dict, dict) else None
+        if classifier_weight is not None and hasattr(classifier_weight, 'shape'):
+            in_features = classifier_weight.shape[1]
+            if in_features == hidden_dim * 4 + 5:
+                use_delta_a = False
+                print("Autoregressive: Detected legacy AR checkpoint (no delta_A). Running in backward compatibility mode.")
+
+        model = AutoregressiveGPS(hidden_channels=hidden_dim, use_delta_a=use_delta_a).to(device)
+        if state_dict:
+            model.load_state_dict(state_dict, strict=False)
             
         if not args.only_accuracy_ar:
             nodes_to_bench = args.nodes

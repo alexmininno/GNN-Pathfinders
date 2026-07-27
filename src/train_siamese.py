@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-from src.siamese_dataset import SiameseIterableDataset, collate_siamese
+from src.siamese_dataset import SiameseIterableDataset, CurriculumMixedDataset, collate_siamese
 from src.model_siamese import SiameseSeiberg
 
 # -------------------------------------------------------------
@@ -124,6 +124,7 @@ def parse_args():
     parser.add_argument("--gnn_layers", type=int, default=3)
     parser.add_argument("--transformer_layers", type=int, default=2)
     parser.add_argument("--nhead", type=int, default=4)
+    parser.add_argument("--pe_channels", type=int, default=8, help="Positional encoding channels")
     parser.add_argument("--num_workers", type=int, default=0)
 
     parser.add_argument(
@@ -164,7 +165,12 @@ def parse_args():
         default=2.0,
         help="Start at 2.0 to give target variance, preventing mode collapse.",
     )
-    parser.add_argument("--curr_end_dist", type=float, default=15.0)
+    parser.add_argument(
+        "--curr_end_dist",
+        type=float,
+        default=0.0,
+        help="End curriculum distance (0.0 means use max_db_dist limit)",
+    )
     parser.add_argument(
         "--curr_mae_threshold",
         type=float,
@@ -208,6 +214,9 @@ def parse_args():
     )
     parser.add_argument(
         "--eta_min", type=float, default=1e-5, help="Min LR for cosine scheduler"
+    )
+    parser.add_argument(
+        "--override_lr", type=float, default=None, help="Override LR when resuming"
     )
     parser.add_argument(
         "--reset_lr_on_curr",
@@ -420,16 +429,11 @@ def main():
         if not os.path.exists(path_nd):
             return None
         ds = SiameseIterableDataset(path_nd, split=split)
-
-        # When mixing, we hold up to 30 dataloaders in memory simultaneously.
-        # If args.num_workers > 0, this spawns 30 * num_workers processes, deadlocking macOS.
-        actual_workers = 0 if is_mixing else args.num_workers
-
         return DataLoader(
             ds,
             batch_size=args.batch_size,
             collate_fn=collate_siamese,
-            num_workers=actual_workers,
+            num_workers=0,
             pin_memory=(device.type == "cuda"),
         )
 
@@ -482,7 +486,11 @@ def main():
     max_db_dist = get_max_available_dist(args.db, available_stages)
     if args.max_dist > 0:
         max_db_dist = min(max_db_dist, args.max_dist)
-    curr_end_dist = min(args.curr_end_dist, float(max_db_dist))
+    curr_end_dist = (
+        float(max_db_dist)
+        if args.curr_end_dist <= 0.0
+        else min(args.curr_end_dist, float(max_db_dist))
+    )
 
     # Model
     model = SiameseSeiberg(
@@ -531,9 +539,20 @@ def main():
             model.load_state_dict(ckpt["model_state_dict"], strict=False)
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
 
-            # 1. ADD THESE LINES TO OVERRIDE THE LOADED LEARNING RATE
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = 1e-5
+            if args.override_lr is not None:
+                print(f"Overriding learning rate to {args.override_lr}")
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = args.override_lr
+
+                if scheduler:
+                    # Reset scheduler to use the new LR
+                    t_max = args.scheduler_period if args.scheduler_period > 0 else args.epochs
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer, T_max=t_max, eta_min=args.eta_min
+                    )
+            else:
+                if scheduler and "scheduler_state_dict" in ckpt:
+                    scheduler.load_state_dict(ckpt["scheduler_state_dict"])
 
             start_epoch = ckpt["epoch"]
             if not args.clear_history and "history" in ckpt:
@@ -543,16 +562,10 @@ def main():
             if "best_dist_mae" in ckpt:
                 best_dist_mae = ckpt["best_dist_mae"]
             if "current_max_dist" in ckpt:
-                current_max_dist = ckpt["current_max_dist"]
+                if args.curriculum:
+                    current_max_dist = ckpt["current_max_dist"]
             if "consecutive_success" in ckpt:
                 consecutive_success = ckpt["consecutive_success"]
-
-            # 2. COMMENT OUT OR DELETE THE SCHEDULER LOADING
-            # if scheduler and "scheduler_state_dict" in ckpt:
-            #     scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-
-            # 3. DISABLE THE SCHEDULER SO IT DOESN'T REVERT YOUR OVERRIDE
-            scheduler = None
 
     scaler = torch.amp.GradScaler(
         "cuda" if device.type == "cuda" else "cpu", enabled=(device.type == "cuda")
@@ -616,16 +629,16 @@ def main():
             last_log_time = time.time()
             batches_since_log = 0
 
-            # Build iters per (n, d)
-            iters = {}
+            # Build quotas per (n, d)
+            mixed_quotas = {}
             valid_stages_for_d = {}
             for d in dist_weights.keys():
                 valid = [n for n in available_stages if n >= d]
                 if args.dist_node and len(valid) == 0:
                     print(
-                        f"  [WARNING] --dist_node: no stages satisfy n >= {d}. Falling back to all available stages for distance {d}."
+                        f"  [WARNING] --dist_node: no stages satisfy n >= {d}. Skipping training for distance {d}."
                     )
-                    valid_stages_for_d[d] = available_stages
+                    valid_stages_for_d[d] = []
                 elif args.dist_node:
                     valid_stages_for_d[d] = valid
                 else:
@@ -642,35 +655,36 @@ def main():
                 total_quota_valid = sum(stage_quotas[n] for n in valid_n)
 
                 for n in valid_n:
-                    loader = get_loader_for(n, d, "train")
-                    if loader is not None:
-                        scale_factor = (
-                            total_quota_all / total_quota_valid
-                            if total_quota_valid > 0
-                            else 1.0
-                        )
-                        q = max(1, int(stage_quotas[n] * scale_factor * w))
-                        iters[(n, d)] = {"iter": iter(loader), "quota": q, "done": 0}
+                    scale_factor = (
+                        total_quota_all / total_quota_valid
+                        if total_quota_valid > 0
+                        else 1.0
+                    )
+                    q = max(1, int(stage_quotas[n] * scale_factor * w))
+                    mixed_quotas[(n, d)] = q
 
-            active_keys = list(iters.keys())
-            total_target_batches = sum(v["quota"] for v in iters.values())
+            total_target_batches = sum(mixed_quotas.values())
 
-            while active_keys:
-                weights = [
-                    max(1, iters[k]["quota"] - iters[k]["done"]) for k in active_keys
-                ]
-                key = random.choices(active_keys, weights=weights, k=1)[0]
-                st = iters[key]
-                if st["done"] >= st["quota"]:
-                    active_keys.remove(key)
-                    continue
+            # Instantiate unified dataset and dataloader
+            train_ds = CurriculumMixedDataset(
+                quotas=mixed_quotas,
+                db_path=args.db,
+                split="train",
+                seed=42 + epoch,
+                max_yields=total_target_batches * args.batch_size,
+                autoregressive=False,
+                pe_channels=args.pe_channels,
+            )
 
-                try:
-                    data_a, data_b, dist_true, _, _ = next(st["iter"])
-                except StopIteration:
-                    active_keys.remove(key)
-                    continue
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=args.batch_size,
+                collate_fn=collate_siamese,
+                num_workers=args.num_workers,
+                pin_memory=(device.type == "cuda")
+            )
 
+            for data_a, data_b, dist_true, _, _ in train_loader:
                 data_a, data_b = data_a.to(device), data_b.to(device)
                 dist_true = dist_true.to(device)
                 batch_size = data_a.num_graphs
@@ -684,9 +698,9 @@ def main():
 
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_(
+                    torch.nn.utils.clip_grad_norm_(
                         filter(lambda p: p.requires_grad, model.parameters()),
-                        max=1.0,
+                        max_norm=1.0,
                     )
                     scaler.step(optimizer)
                     scaler.update()
@@ -695,11 +709,14 @@ def main():
                     dist_pred = model(data_a, data_b)
                     loss = criterion_mse(dist_pred, dist_true)
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(
+                        filter(lambda p: p.requires_grad, model.parameters()),
+                        max_norm=1.0,
+                    )
                     optimizer.step()
 
                 t_dist_loss += loss.item() * batch_size
                 t_samples += batch_size
-                st["done"] += 1
                 epoch_batches += 1
                 batches_since_log += 1
 
@@ -728,14 +745,14 @@ def main():
             count_by_dist = {}
             v_loss_sum = 0
 
-            eval_keys = list(iters.keys())
+            eval_keys = list(mixed_quotas.keys())
             num_st = 0
             for k in eval_keys:  # keys are (n, d)
                 n, d = k
                 test_loader = get_loader_for(n, d, "test")
                 if test_loader is None:
                     continue
-                v_quota = max(10, min(100, iters[k]["quota"] // 4))
+                v_quota = max(10, min(100, mixed_quotas[k] // 4))
                 run_m, run_l = evaluate_model(
                     model,
                     test_loader,
