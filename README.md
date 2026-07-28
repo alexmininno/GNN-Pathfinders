@@ -1,6 +1,6 @@
 # Graphs Pathfinders
 
-This repository contains the codebase for training, evaluating, and running neural pathfinders for Seiberg duality graphs.
+This repository is the official codebase associated with the work on tracing Seiberg Dualities ([arXiv:xxxx.yyyy [hep-th]](https://arxiv.org/abs/xxxx.yyyy)). It contains the tools for training, evaluating, and running neural pathfinders for Seiberg duality graphs.
 
 ## Setup
 To set up the environment, run the provided `setup_env.sh` script to create a conda environment named `seiberg-gnn`:
