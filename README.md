@@ -1,6 +1,10 @@
 # Graphs Pathfinders
 
-This repository is the official codebase associated with the work on tracing Seiberg Dualities ([arXiv:xxxx.yyyy [hep-th]](https://arxiv.org/abs/xxxx.yyyy)). It contains the tools for training, evaluating, and running neural pathfinders for Seiberg duality graphs.
+This repository contains the codebase and data generation tools for tracing Seiberg dualities, as detailed in [arXiv:xxxx.yyyy [hep-th]](https://arxiv.org/abs/xxxx.yyyy). The project applies machine learning to the problem of establishing when two supersymmetric quiver gauge theories are dual. Mathematically, this translates to finding a sequence of quiver mutations connecting two graphs.
+
+The code generates training datasets of quiver gauge theories originating from D-branes probing toric Calabi-Yau singularities. It includes two primary graph neural network (GNN) architectures built with transformer layers: a Distance GNN (DGNN) that estimates the minimum mutations required to connect a pair of theories, and an Adviser GNN (AGNN) that assigns probabilities to the vertices most likely to be dualized next.
+
+These networks guide heuristic search algorithms to find paths between theories. The repository implements bidirectional A* and beam search pathfinders, treating the DGNN output as the heuristic and the AGNN output as the cost function. It also includes physics-informed approaches like the Lowest Common Ancestor (LCA) pathfinder, alongside hybrid models that combine neural network policies with deterministic rules. The provided tools allow users to train new models, reproduce benchmark metrics against breadth-first search baselines, and explore the computational complexity of different duality networks.
 
 ## Setup
 To set up the environment, run the provided `setup_env.sh` script to create a conda environment named `seiberg-gnn`:
