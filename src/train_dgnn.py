@@ -131,7 +131,7 @@ def parse_args():
         "--dry_run", action="store_true", help="Run 1 epoch, 10 batches max"
     )
     parser.add_argument(
-        "--checkpoint_dgnn",
+        "--checkpoint",
         type=str,
         default="checkpoint_dgnn.pth",
         help="Path to save/resume DGNN checkpoint",
@@ -143,7 +143,7 @@ def parse_args():
         help="Path to save best checkpoint",
     )
     parser.add_argument(
-        "--resume", action="store_true", help="Resume from checkpoint_dgnn"
+        "--resume", action="store_true", help="Resume from checkpoint"
     )
     parser.add_argument(
         "--clear_history", action="store_true", help="Clear metrics when resuming"
@@ -530,8 +530,8 @@ def main():
 
     if args.resume:
         resume_path = (
-            args.checkpoint_dgnn
-            if os.path.exists(args.checkpoint_dgnn)
+            args.checkpoint
+            if os.path.exists(args.checkpoint)
             else args.checkpoint_best
         )
         if os.path.exists(resume_path):

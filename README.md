@@ -68,10 +68,10 @@ options:
                         Positional encoding channels
   --num_workers NUM_WORKERS
   --dry_run             Run 1 epoch, 10 batches max
-  --checkpoint_dgnn CHECKPOINT_DGNN
+  --checkpoint CHECKPOINT
                         Path to save/resume DGNN checkpoint
   --checkpoint_best CHECKPOINT_BEST
-  --resume              Resume from checkpoint_dgnn
+  --resume              Resume from checkpoint
   --clear_history       Clear metrics when resuming
   --min_dist MIN_DIST   Minimum mutation distance to include
   --max_dist MAX_DIST   Maximum mutation distance to include (0 means no
@@ -106,6 +106,25 @@ options:
                         means reset to 80% of previous start LR)
   --save_logs           Save CSV logs
   --log_dir LOG_DIR     Log directory
+```
+
+**Example:**
+
+```bash
+python src/train_dgnn.py \
+  --nodes mix \
+  --sqrt_mix \
+  --epochs 250 \
+  --num_workers 5 \
+  --save_logs \
+  --log_dir logs_dgnn \
+  --dist_node \
+  --checkpoint checkpoints/checkpoint_dgnn.pth \
+  --checkpoint_best checkpoints/best_dgnn.pth \
+  --lr 1e-4 \
+  --use_scheduler \
+  --scheduler_period 250 \
+  --eta_min 1e-6
 ```
 
 ### `src/train_agnn.py`
@@ -191,6 +210,24 @@ options:
   --reset_lr_decay RESET_LR_DECAY
 ```
 
+**Example:**
+
+```bash
+python src/train_agnn.py \
+  --nodes mix \
+  --sqrt_mix \
+  --epochs 250 \
+  --batch_size 128 \
+  --num_workers 3 \
+  --save_logs \
+  --log_dir logs_agnn \
+  --dist_node \
+  --use_scheduler \
+  --eta_min 1e-6 \
+  --checkpoint checkpoint_agnn.pth \
+  --checkpoint_best best_agnn.pth 
+```
+
 ### `src/predictor_dgnn.py`
 
 ```text
@@ -214,6 +251,17 @@ options:
                         Example: --adj_b '[[0,0,1],[1,0,0],[0,1,0]]'
 ```
 
+**Example:**
+
+```bash
+python src/predictor_dgnn.py \
+  --model_path checkpoints/best_dgnn.pth \
+  --ranks_a '[5, 1, 2, 1, 3]' \
+  --adj_a '[[0, 3, 0, 0, 1], [0, 0, 8, 0, 0], [3, 0, 0, 0, 0], [0, 1, 4, 0, 0], [0, 0, 1, 3, 0]]' \
+  --ranks_b '[1, 1, 2, 1, 3]' \
+  --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]'
+```
+
 ### `src/predictor_agnn.py`
 
 ```text
@@ -230,6 +278,17 @@ options:
   --adj_a ADJ_A      e.g. '[[0,1,0],[0,0,1],[1,0,0]]'
   --ranks_b RANKS_B  e.g. '[1, 1, 3]'
   --adj_b ADJ_B      e.g. '[[0,0,1],[1,0,0],[0,1,0]]'
+```
+
+**Example:**
+
+```bash
+python src/predictor_agnn.py \
+  --model checkpoints/best_agnn.pth \
+  --ranks_a '[5, 1, 2, 1, 3]' \
+  --adj_a '[[0, 3, 0, 0, 1], [0, 0, 8, 0, 0], [3, 0, 0, 0, 0], [0, 1, 4, 0, 0], [0, 0, 1, 3, 0]]' \
+  --ranks_b '[1, 1, 2, 1, 3]' \
+  --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]'
 ```
 
 ### `pathfinders/find_path.py`
@@ -298,6 +357,104 @@ options:
   --cost_increase COST_INCREASE
                         Cost multiplier for rank increase. Example:
                         --cost_increase 5.0
+```
+
+**Example:**
+
+```bash
+python pathfinders/find_path.py \
+  --ranks_a '[5, 1, 2, 1, 3]' \
+  --adj_a '[[0, 3, 0, 0, 1], [0, 0, 8, 0, 0], [3, 0, 0, 0, 0], [0, 1, 4, 0, 0], [0, 0, 1, 3, 0]]' \
+  --ranks_b '[1, 1, 2, 1, 3]' \
+  --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]' \
+  --dgnn --agnn --hybrid --lca --hybrid_lca --det \
+  --dgnn_model checkpoints/best_dgnn.pth \
+  --agnn_model checkpoints/best_agnn.pth
+```
+
+Output:
+```text
+Running Find Path...
+Start Graph Ranks: [5, 1, 2, 1, 3]
+Target Graph Ranks: [1, 1, 2, 1, 3]
+--------------------------------------------------
+Running Deterministic Greedy Pathfinder (LCA)...
+Result: {
+  "path": [
+    0
+  ],
+  "visited_states": 3,
+  "status": "success",
+  "nodes_explored": 3
+}
+
+Running Heuristic (LCA) Bidirectional A* Pathfinder...
+Result: {
+  "path": [
+    0
+  ],
+  "visited_states": 3,
+  "status": "success",
+  "nodes_explored": 3
+}
+
+Running DGNN Bidirectional A* Pathfinder...
+Result: {
+  "path": [
+    0
+  ],
+  "visited_states": 3,
+  "fwd_nodes": 1,
+  "bwd_nodes": 2,
+  "status": "success",
+  "meeting_depth_fwd": 0,
+  "meeting_depth_bwd": 1,
+  "initial_h_fwd": 0.91,
+  "initial_h_bwd": 0.82,
+  "model_passes": 1
+}
+
+Running AGNN Beam Search Pathfinder...
+Result: {
+  "status": "success",
+  "path": [
+    0
+  ],
+  "model_passes": 1,
+  "visited_states": 2
+}
+
+Running Hybrid Bidirectional A* Pathfinder...
+Result: {
+  "path": [
+    0
+  ],
+  "visited_states": 3,
+  "fwd_nodes": 1,
+  "bwd_nodes": 2,
+  "status": "success",
+  "meeting_depth_fwd": 0,
+  "meeting_depth_bwd": 1,
+  "initial_h_fwd": 0.91,
+  "initial_h_bwd": 0.82,
+  "model_passes": 1
+}
+
+Running Hybrid LCA Bidirectional A* Pathfinder...
+Result: {
+  "path": [
+    0
+  ],
+  "visited_states": 3,
+  "fwd_nodes": 1,
+  "bwd_nodes": 2,
+  "status": "success",
+  "meeting_depth_fwd": 0,
+  "meeting_depth_bwd": 1,
+  "initial_h_fwd": 0.91,
+  "initial_h_bwd": 0.82,
+  "model_passes": 1
+}
 ```
 
 ### `analysis/evaluate_pathfinders.py`
@@ -375,6 +532,19 @@ options:
   --baseline {bfs,lca}
 ```
 
+**Example:**
+
+```bash
+python analysis/evaluate_pathfinders.py \
+  --agnn_model best_agnn.pth \
+  --dgnn_model best_dgnn.pth \
+  --num_workers 5 \
+  --relax_anomaly \
+  --min_sample 1000 \
+  --output_dir results/ \
+  --datasets databases/Theories_dataset/
+```
+
 ### `benchmark/benchmark_nn.py`
 
 ```text
@@ -430,6 +600,24 @@ options:
   --make_pdf            Generate .pdf and _045.pdf plots in addition to .png
 ```
 
+**Example:**
+
+```bash
+python benchmark/benchmark_nn.py \
+  --dgnn \
+  --agnn \
+  --output_dir results \
+  --dataset_root databases/Theories_dataset \
+  --num_workers 6 \
+  --checkpoint_dgnn best_dgnn.pth \
+  --checkpoint_agnn best_agnn.pth \
+  --evaluate_policy_margin_agnn \
+  --extract_embeddings_dgnn \
+  --evaluate_monotonicity_dgnn \
+  --benchmark_latency_dgnn \
+  --evaluate_deterministic_benchmark_dgnn
+```
+
 ### `benchmark/plot_training_logs.py`
 
 ```text
@@ -448,6 +636,15 @@ options:
   --logs_dir_agnn LOGS_DIR_AGNN
   --logs_dir_dgnn LOGS_DIR_DGNN
   --output_dir OUTPUT_DIR
+```
+
+**Example:**
+
+```bash
+python benchmark/plot_training_logs.py \
+  --logs_dir_agnn logs/train_logs_agnn.csv \
+  --logs_dir_dgnn logs/train_logs_dgnn.csv \
+  --output_dir logs_plots/
 ```
 
 ### `scripts/plot_style.py`
@@ -512,4 +709,17 @@ options:
   --max_pairs_per_dist MAX_PAIRS_PER_DIST
                         Maximum number of random pairs to generate per
                         distance bucket to prevent disk exhaustion
+```
+
+**Example:**
+
+```bash
+python scripts/generate_dataset.py \
+  --nodes 1 2 3 4 5 6 7 8 9 10 \
+  --dists 0 1 2 3 4 5 6 7 8 9 10 11 12 \
+  --bfs_depth 6 \
+  --max_pairs_per_dist 10000 \
+  --input_db databases/BasicTheoriesData_100.json \
+  --output_dir databases/Theories_dataset/ \
+  --num_workers 5
 ```

@@ -1151,6 +1151,8 @@ if __name__ == "__main__":
     ranks_b = ast.literal_eval(args.ranks_b)
     adj_b = ast.literal_eval(args.adj_b)
     
+    import json
+    
     # If no specific method is chosen, run all of them
     run_all = not (args.dgnn or args.agnn or args.hybrid or args.lca or args.hybrid_lca or args.det)
     
@@ -1159,8 +1161,52 @@ if __name__ == "__main__":
     print(f"Target Graph Ranks: {ranks_b}")
     print("-" * 50)
     
-    # Note: the models would be instantiated here and passed to the individual pathfinders.
-    # The user can just see they compile. 
-    # For execution, they would instantiate the objects and call .solve()
+    results = {}
     
-    print("Compiled successfully!")
+    if args.det or run_all:
+        print("Running Deterministic Greedy Pathfinder (LCA)...")
+        pf = LCAPathfinder()
+        res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
+        print(f"Result: {json.dumps(res, indent=2)}\n")
+        
+    if args.lca or run_all:
+        print("Running Heuristic (LCA) Bidirectional A* Pathfinder...")
+        pf = LCAPathfinder()
+        res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
+        print(f"Result: {json.dumps(res, indent=2)}\n")
+        
+    if args.dgnn or run_all:
+        print("Running DGNN Bidirectional A* Pathfinder...")
+        if not args.dgnn_model:
+            print("Error: --dgnn_model is required for DGNN pathfinder.")
+        else:
+            pf = HeuristicBidirectionalPathfinder(model_path=args.dgnn_model)
+            res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
+            print(f"Result: {json.dumps(res, indent=2)}\n")
+
+    if args.agnn or run_all:
+        print("Running AGNN Beam Search Pathfinder...")
+        if not args.agnn_model:
+            print("Error: --agnn_model is required for AGNN pathfinder.")
+        else:
+            pf = AGNNPathfinder(model_path=args.agnn_model)
+            res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, beam_width=args.beam_width, enforce_anomaly_free=not args.relax_anomaly)
+            print(f"Result: {json.dumps(res, indent=2)}\n")
+
+    if args.hybrid or run_all:
+        print("Running Hybrid Bidirectional A* Pathfinder...")
+        if not args.dgnn_model or not args.agnn_model:
+            print("Error: both --dgnn_model and --agnn_model are required for Hybrid pathfinder.")
+        else:
+            pf = HybridBidirectionalPathfinder(dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model)
+            res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, lambda_agnn=args.lambda_agnn, top_k=args.top_k, enforce_anomaly_free=not args.relax_anomaly)
+            print(f"Result: {json.dumps(res, indent=2)}\n")
+
+    if args.hybrid_lca or run_all:
+        print("Running Hybrid LCA Bidirectional A* Pathfinder...")
+        if not args.dgnn_model or not args.agnn_model:
+            print("Error: both --dgnn_model and --agnn_model are required for Hybrid LCA pathfinder.")
+        else:
+            pf = HybridLCAPathfinder(dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model)
+            res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, lambda_agnn=args.lambda_agnn, top_k=args.top_k, enforce_anomaly_free=not args.relax_anomaly, lambda_det_cost=args.lambda_det_cost, lambda_dgnn_h=args.lambda_dgnn_h, lambda_lca_h=args.lambda_lca_h, cost_decrease=args.cost_decrease, cost_equal=args.cost_equal, cost_increase=args.cost_increase)
+            print(f"Result: {json.dumps(res, indent=2)}\n")
