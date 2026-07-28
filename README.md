@@ -262,6 +262,13 @@ python src/predictor_dgnn.py \
   --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]'
 ```
 
+Output:
+```text
+--- DGNN Pure Distance Prediction ---
+Estimated Distance:   0.91
+---------------------------------------------
+```
+
 ### `src/predictor_agnn.py`
 
 ```text
@@ -290,6 +297,17 @@ python src/predictor_agnn.py \
   --ranks_b '[1, 1, 2, 1, 3]' \
   --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]'
 ```
+
+Output:
+```text
+--- AGNN Prediction ---
+Logits:        [6.289902687072754, -0.2608375549316406, -0.6523122787475586, 0.5631594657897949, 2.945847988128662]
+Probabilities: [0.9606642723083496, 0.0013728442136198282, 0.0009281238890253007, 0.0031295265071094036, 0.0339052639901638]
+-----------------------------------
+```
+
+> [!NOTE]
+> The `Logits` array represents the raw, unnormalized scores assigned by the AGNN to each node in the starting graph. Each index maps to a node, and higher scores indicate a stronger prediction that mutating that specific node is the optimal next step toward the target graph. The `Probabilities` array is simply the softmax normalization of these logits.
 
 ### `pathfinders/find_path.py`
 
