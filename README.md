@@ -13,21 +13,21 @@ conda activate seiberg-gnn
 ## Script usage
 Below is the `--help` output and an example command for each script in the repository. When executing scripts located in subdirectories (such as `benchmark/plot_training_logs.py`), run them from the repository root or set `PYTHONPATH=.` so internal imports resolve correctly.
 
-### `src/train_siamese.py`
+### `src/train_dgnn.py`
 
 ```text
-usage: Train Siamese Seiberg [-h] [--db DB] [--nodes NODES] [--mix_stages]
-                             [--sqrt_mix] [--min_mix_nodes MIN_MIX_NODES]
-                             [--max_mix_nodes MAX_MIX_NODES]
-                             [--max_batches_per_epoch MAX_BATCHES_PER_EPOCH]
-                             [--epochs EPOCHS] [--batch_size BATCH_SIZE]
-                             [--lr LR] [--hidden_channels HIDDEN_CHANNELS]
-                             [--gnn_layers GNN_LAYERS]
-                             [--transformer_layers TRANSFORMER_LAYERS]
-                             [--nhead NHEAD] [--pe_channels PE_CHANNELS]
-                             [--num_workers NUM_WORKERS] [--dry_run]
-                             [--checkpoint_siamese CHECKPOINT_SIAMESE]
-                             [--checkpoint_best CHECKPOINT_BEST] [--resume]
+usage: Train DGNN Seiberg [-h] [--db DB] [--nodes NODES] [--mix_stages]
+                          [--sqrt_mix] [--min_mix_nodes MIN_MIX_NODES]
+                          [--max_mix_nodes MAX_MIX_NODES]
+                          [--max_batches_per_epoch MAX_BATCHES_PER_EPOCH]
+                          [--epochs EPOCHS] [--batch_size BATCH_SIZE]
+                          [--lr LR] [--hidden_channels HIDDEN_CHANNELS]
+                          [--gnn_layers GNN_LAYERS]
+                          [--transformer_layers TRANSFORMER_LAYERS]
+                          [--nhead NHEAD] [--pe_channels PE_CHANNELS]
+                          [--num_workers NUM_WORKERS] [--dry_run]
+                          [--checkpoint_dgnn CHECKPOINT_DGNN]
+                          [--checkpoint_best CHECKPOINT_BEST] [--resume]
                              [--clear_history] [--min_dist MIN_DIST]
                              [--max_dist MAX_DIST]
                              [--curr_start_dist CURR_START_DIST]
@@ -68,10 +68,10 @@ options:
                         Positional encoding channels
   --num_workers NUM_WORKERS
   --dry_run             Run 1 epoch, 10 batches max
-  --checkpoint_siamese CHECKPOINT_SIAMESE
-                        Path to save/resume Siamese checkpoint
+  --checkpoint_dgnn CHECKPOINT_DGNN
+                        Path to save/resume DGNN checkpoint
   --checkpoint_best CHECKPOINT_BEST
-  --resume              Resume from checkpoint_siamese
+  --resume              Resume from checkpoint_dgnn
   --clear_history       Clear metrics when resuming
   --min_dist MIN_DIST   Minimum mutation distance to include
   --max_dist MAX_DIST   Maximum mutation distance to include (0 means no
@@ -108,10 +108,10 @@ options:
   --log_dir LOG_DIR     Log directory
 ```
 
-### `src/train_autoregressive.py`
+### `src/train_agnn.py`
 
 ```text
-usage: Train Autoregressive Seiberg GPS [-h] [--db DB] [--nodes NODES]
+usage: Train AGNN Seiberg GPS [-h] [--db DB] [--nodes NODES]
                                         [--dist DIST] [--curriculum]
                                         [--sqrt_mix] [--epochs EPOCHS]
                                         [--batch_size BATCH_SIZE]
@@ -191,19 +191,19 @@ options:
   --reset_lr_decay RESET_LR_DECAY
 ```
 
-### `src/predictor_siamese.py`
+### `src/predictor_dgnn.py`
 
 ```text
-usage: predictor_siamese.py [-h] --model_path MODEL_PATH --ranks_a RANKS_A
-                            --adj_a ADJ_A --ranks_b RANKS_B --adj_b ADJ_B
+usage: predictor_dgnn.py [-h] --model_path MODEL_PATH --ranks_a RANKS_A
+                         --adj_a ADJ_A --ranks_b RANKS_B --adj_b ADJ_B
 
-Siamese Predictor CLI
+DGNN Predictor CLI
 
 options:
   -h, --help            show this help message and exit
   --model_path MODEL_PATH
-                        Path to Siamese checkpoint (.pth). Example:
-                        --model_path $CHECKPOINTS_DIR/best_siamese.pth
+                        Path to DGNN checkpoint (.pth). Example:
+                        --model_path $CHECKPOINTS_DIR/best_dgnn.pth
   --ranks_a RANKS_A     Ranks for Graph A as a list. Example: --ranks_a '[1,
                         2, 3]'
   --adj_a ADJ_A         Adjacency matrix for Graph A as a list of lists.
@@ -214,18 +214,18 @@ options:
                         Example: --adj_b '[[0,0,1],[1,0,0],[0,1,0]]'
 ```
 
-### `src/predictor_autoregressive.py`
+### `src/predictor_agnn.py`
 
 ```text
-usage: predictor_autoregressive.py [-h] --model MODEL --ranks_a RANKS_A
-                                   --adj_a ADJ_A --ranks_b RANKS_B --adj_b
-                                   ADJ_B
+usage: predictor_agnn.py [-h] --model MODEL --ranks_a RANKS_A
+                         --adj_a ADJ_A --ranks_b RANKS_B --adj_b
+                         ADJ_B
 
-Autoregressive Predictor CLI
+AGNN Predictor CLI
 
 options:
   -h, --help         show this help message and exit
-  --model MODEL      Path to AR checkpoint
+  --model MODEL      Path to AGNN checkpoint
   --ranks_a RANKS_A  e.g. '[1, 2, 3]'
   --adj_a ADJ_A      e.g. '[[0,1,0],[0,0,1],[1,0,0]]'
   --ranks_b RANKS_B  e.g. '[1, 1, 3]'
@@ -235,14 +235,14 @@ options:
 ### `pathfinders/find_path.py`
 
 ```text
-usage: find_path.py [-h] [--siamese] [--ar] [--hybrid] [--lca] [--hybrid_lca]
+usage: find_path.py [-h] [--dgnn] [--agnn] [--hybrid] [--lca] [--hybrid_lca]
                     [--det] --ranks_a RANKS_A --adj_a ADJ_A --ranks_b RANKS_B
-                    --adj_b ADJ_B [--siamese_model SIAMESE_MODEL]
-                    [--ar_model AR_MODEL] [--max_steps MAX_STEPS]
+                    --adj_b ADJ_B [--dgnn_model DGNN_MODEL]
+                    [--agnn_model AGNN_MODEL] [--max_steps MAX_STEPS]
                     [--max_nodes MAX_NODES] [--beam_width BEAM_WIDTH]
-                    [--relax_anomaly] [--lambda_ar LAMBDA_AR] [--top_k TOP_K]
+                    [--relax_anomaly] [--lambda_agnn LAMBDA_AGNN] [--top_k TOP_K]
                     [--lambda_det_cost LAMBDA_DET_COST]
-                    [--lambda_siamese_h LAMBDA_SIAMESE_H]
+                    [--lambda_dgnn_h LAMBDA_DGNN_H]
                     [--lambda_lca_h LAMBDA_LCA_H]
                     [--cost_decrease COST_DECREASE] [--cost_equal COST_EQUAL]
                     [--cost_increase COST_INCREASE]
@@ -251,8 +251,8 @@ Unified Pathfinder for Seiberg Duality
 
 options:
   -h, --help            show this help message and exit
-  --siamese             Run Siamese A* Pathfinder
-  --ar                  Run Autoregressive Beam Search Pathfinder
+  --dgnn                Run DGNN A* Pathfinder
+  --agnn                Run AGNN Beam Search Pathfinder
   --hybrid              Run Hybrid Bidirectional A* Pathfinder
   --lca                 Run Heuristic (LCA) Bidirectional A* Pathfinder
   --hybrid_lca          Run Deterministic Hybrid Bidirectional A* Pathfinder
@@ -263,30 +263,30 @@ options:
   --ranks_b RANKS_B     Ranks for Graph B. Example: --ranks_b '[1, 1, 3]'
   --adj_b ADJ_B         Adjacency matrix for Graph B. Example: --adj_b
                         '[[0,0,1],[1,0,0],[0,1,0]]'
-  --siamese_model SIAMESE_MODEL
-                        Path to Siamese .pth checkpoint. Example:
-                        --siamese_model $CHECKPOINTS_DIR/best_siamese.pth
-  --ar_model AR_MODEL   Path to AR .pth checkpoint. Example: --ar_model
-                        $CHECKPOINTS_DIR/best_auto.pth
+  --dgnn_model DGNN_MODEL
+                        Path to DGNN .pth checkpoint. Example:
+                        --dgnn_model $CHECKPOINTS_DIR/best_dgnn.pth
+  --agnn_model AGNN_MODEL   Path to AGNN .pth checkpoint. Example: --agnn_model
+                        $CHECKPOINTS_DIR/best_agnn.pth
   --max_steps MAX_STEPS
                         Maximum total search depth. Example: --max_steps 50
   --max_nodes MAX_NODES
                         Maximum nodes to explore before aborting. Example:
                         --max_nodes 100000
   --beam_width BEAM_WIDTH
-                        Beam width for AR search. Example: --beam_width 3
+                        Beam width for AGNN search. Example: --beam_width 3
   --relax_anomaly       Skip the anomaly-free check (N_f_in == N_f_out)
-  --lambda_ar LAMBDA_AR
-                        Weight for AR log-prob penalty in hybrid search.
-                        Example: --lambda_ar 1.0
-  --top_k TOP_K         Filter actions to only top K predicted by AR model.
+  --lambda_agnn LAMBDA_AGNN
+                        Weight for AGNN log-prob penalty in hybrid search.
+                        Example: --lambda_agnn 1.0
+  --top_k TOP_K         Filter actions to only top K predicted by AGNN model.
                         Example: --top_k 5
   --lambda_det_cost LAMBDA_DET_COST
                         Weight for deterministic step cost in Hybrid LCA.
                         Example: --lambda_det_cost 0.5
-  --lambda_siamese_h LAMBDA_SIAMESE_H
-                        Weight for Siamese heuristic. Example:
-                        --lambda_siamese_h 1.0
+  --lambda_dgnn_h LAMBDA_DGNN_H
+                        Weight for DGNN heuristic. Example:
+                        --lambda_dgnn_h 1.0
   --lambda_lca_h LAMBDA_LCA_H
                         Weight for LCA heuristic. Example: --lambda_lca_h 1.0
   --cost_decrease COST_DECREASE
@@ -303,15 +303,15 @@ options:
 ### `analysis/evaluate_pathfinders.py`
 
 ```text
-usage: evaluate_pathfinders.py [-h] [--siamese] [--ar] [--hybrid] [--lca]
-                               [--hybrid_lca] [--siamese_model SIAMESE_MODEL]
-                               [--ar_model AR_MODEL]
-                               [--hidden_channels_siamese HIDDEN_CHANNELS_SIAMESE]
-                               [--hidden_channels_ar HIDDEN_CHANNELS_AR]
+usage: evaluate_pathfinders.py [-h] [--dgnn] [--agnn] [--hybrid] [--lca]
+                               [--hybrid_lca] [--dgnn_model DGNN_MODEL]
+                               [--agnn_model AGNN_MODEL]
+                               [--hidden_channels_dgnn HIDDEN_CHANNELS_DGNN]
+                               [--hidden_channels_agnn HIDDEN_CHANNELS_AGNN]
                                [--beam_width BEAM_WIDTH]
-                               [--lambda_ar LAMBDA_AR] [--top_k TOP_K]
+                               [--lambda_agnn LAMBDA_AGNN] [--top_k TOP_K]
                                [--lambda_det_cost LAMBDA_DET_COST]
-                               [--lambda_siamese_h LAMBDA_SIAMESE_H]
+                               [--lambda_dgnn_h LAMBDA_DGNN_H]
                                [--lambda_lca_h LAMBDA_LCA_H]
                                [--cost_decrease COST_DECREASE]
                                [--cost_equal COST_EQUAL]
@@ -334,20 +334,20 @@ usage: evaluate_pathfinders.py [-h] [--siamese] [--ar] [--hybrid] [--lca]
 
 options:
   -h, --help            show this help message and exit
-  --siamese
-  --ar
+  --dgnn
+  --agnn
   --hybrid
   --lca
   --hybrid_lca
-  --siamese_model SIAMESE_MODEL
-  --ar_model AR_MODEL
-  --hidden_channels_siamese HIDDEN_CHANNELS_SIAMESE
-  --hidden_channels_ar HIDDEN_CHANNELS_AR
+  --dgnn_model DGNN_MODEL
+  --agnn_model AGNN_MODEL
+  --hidden_channels_dgnn HIDDEN_CHANNELS_DGNN
+  --hidden_channels_agnn HIDDEN_CHANNELS_AGNN
   --beam_width BEAM_WIDTH
-  --lambda_ar LAMBDA_AR
+  --lambda_agnn LAMBDA_AGNN
   --top_k TOP_K
   --lambda_det_cost LAMBDA_DET_COST
-  --lambda_siamese_h LAMBDA_SIAMESE_H
+  --lambda_dgnn_h LAMBDA_DGNN_H
   --lambda_lca_h LAMBDA_LCA_H
   --cost_decrease COST_DECREASE
   --cost_equal COST_EQUAL
@@ -378,75 +378,75 @@ options:
 ### `benchmark/benchmark_nn.py`
 
 ```text
-usage: benchmark_nn.py [-h] [--siamese] [--ar] --checkpoint CHECKPOINT
+usage: benchmark_nn.py [-h] [--dgnn] [--agnn] --checkpoint CHECKPOINT
                        [--dataset_root DATASET_ROOT] [--output_dir OUTPUT_DIR]
                        [--nodes NODES [NODES ...]]
-                       [--hidden_channels_siamese HIDDEN_CHANNELS_SIAMESE]
-                       [--hidden_channels_ar HIDDEN_CHANNELS_AR]
+                       [--hidden_channels_dgnn HIDDEN_CHANNELS_DGNN]
+                       [--hidden_channels_agnn HIDDEN_CHANNELS_AGNN]
                        [--max_pairs_per_bucket MAX_PAIRS_PER_BUCKET]
                        [--num_workers NUM_WORKERS] [--batch_size BATCH_SIZE]
-                       [--extract_embeddings_siamese]
-                       [--evaluate_monotonicity_siamese]
-                       [--benchmark_latency_siamese]
-                       [--evaluate_deterministic_benchmark_siamese]
-                       [--max_deter_steps_siamese MAX_DETER_STEPS_SIAMESE]
-                       [--only_inference_ar] [--only_accuracy_ar]
-                       [--evaluate_policy_margin_ar] [--make_pdf]
+                       [--extract_embeddings_dgnn]
+                       [--evaluate_monotonicity_dgnn]
+                       [--benchmark_latency_dgnn]
+                       [--evaluate_deterministic_benchmark_dgnn]
+                       [--max_deter_steps_dgnn MAX_DETER_STEPS_DGNN]
+                       [--only_inference_agnn] [--only_accuracy_agnn]
+                       [--evaluate_policy_margin_agnn] [--make_pdf]
 
 Unified Benchmark Neural Networks
 
 options:
   -h, --help            show this help message and exit
-  --siamese             Benchmark Siamese inference
-  --ar                  Benchmark Autoregressive inference
+  --dgnn                Benchmark DGNN inference
+  --agnn                Benchmark AGNN inference
   --checkpoint CHECKPOINT
                         Path to .pth checkpoint
   --dataset_root DATASET_ROOT
   --output_dir OUTPUT_DIR
   --nodes NODES [NODES ...]
-  --hidden_channels_siamese HIDDEN_CHANNELS_SIAMESE
-  --hidden_channels_ar HIDDEN_CHANNELS_AR
+  --hidden_channels_dgnn HIDDEN_CHANNELS_DGNN
+  --hidden_channels_agnn HIDDEN_CHANNELS_AGNN
   --max_pairs_per_bucket MAX_PAIRS_PER_BUCKET
   --num_workers NUM_WORKERS
   --batch_size BATCH_SIZE
-  --extract_embeddings_siamese
-                        Extract embeddings for t-SNE visualization (Siamese
+  --extract_embeddings_dgnn
+                        Extract embeddings for t-SNE visualization (DGNN
                         only)
-  --evaluate_monotonicity_siamese
-                        Evaluate heuristic triangle inequality (Siamese only)
-  --benchmark_latency_siamese
-                        Run latency benchmark only (no dataset needed, Siamese
+  --evaluate_monotonicity_dgnn
+                        Evaluate heuristic triangle inequality (DGNN only)
+  --benchmark_latency_dgnn
+                        Run latency benchmark only (no dataset needed, DGNN
                         only)
-  --evaluate_deterministic_benchmark_siamese, --evaluate_deterministic_benchmark
+  --evaluate_deterministic_benchmark_dgnn, --evaluate_deterministic_benchmark
                         Evaluate 3-way distance benchmark and permutation
-                        invariance (Siamese only)
-  --max_deter_steps_siamese MAX_DETER_STEPS_SIAMESE, --max_deter_steps MAX_DETER_STEPS_SIAMESE
+                        invariance (DGNN only)
+  --max_deter_steps_dgnn MAX_DETER_STEPS_DGNN, --max_deter_steps MAX_DETER_STEPS_DGNN
                         Max steps for deterministic LCAPathfinder in 3-way
                         benchmark
-  --only_inference_ar   Run only hardware inference benchmark (AR only)
-  --only_accuracy_ar    Run only physical accuracy benchmark (AR only)
-  --evaluate_policy_margin_ar
-                        Evaluate local policy margin (AR only)
+  --only_inference_agnn   Run only hardware inference benchmark (AGNN only)
+  --only_accuracy_agnn    Run only physical accuracy benchmark (AGNN only)
+  --evaluate_policy_margin_agnn
+                        Evaluate local policy margin (AGNN only)
   --make_pdf            Generate .pdf and _045.pdf plots in addition to .png
 ```
 
 ### `benchmark/plot_training_logs.py`
 
 ```text
-usage: plot_training_logs.py [-h] [--siamese] [--ar] [--make_pdf]
-                             [--logs_dir_ar LOGS_DIR_AR]
-                             [--logs_dir_siamese LOGS_DIR_SIAMESE]
+usage: plot_training_logs.py [-h] [--dgnn] [--agnn] [--make_pdf]
+                             [--logs_dir_agnn LOGS_DIR_AGNN]
+                             [--logs_dir_dgnn LOGS_DIR_DGNN]
                              [--output_dir OUTPUT_DIR]
 
 Plot Training Logs
 
 options:
   -h, --help            show this help message and exit
-  --siamese             Plot Siamese logs
-  --ar                  Plot Autoregressive logs
+  --dgnn                Plot DGNN logs
+  --agnn                Plot AGNN logs
   --make_pdf            Generate .pdf and _045.pdf plots in addition to .png
-  --logs_dir_ar LOGS_DIR_AR
-  --logs_dir_siamese LOGS_DIR_SIAMESE
+  --logs_dir_agnn LOGS_DIR_AGNN
+  --logs_dir_dgnn LOGS_DIR_DGNN
   --output_dir OUTPUT_DIR
 ```
 

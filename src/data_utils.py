@@ -274,7 +274,7 @@ class SeibergChunkedDataset(IterableDataset):
                 )
 
                 # Strip family_id: it's a non-tensor string used only by
-                # generate_siamese_v3_dataset (which reads .pt directly via
+                # generate_dgnn_v3_dataset (which reads .pt directly via
                 # torch.load). PyG's Batch.from_data_list cannot collate
                 # strings, and old .pt files don't have it → KeyError.
                 if hasattr(data, "family_id"):

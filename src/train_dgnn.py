@@ -1,7 +1,7 @@
 """
-train_siamese.py
+train_dgnn.py
 
-Training script for Siamese.
+Training script for DGNN.
 Implements a strict Continuous Distance Regressor for Heuristic Pipeline usage.
 """
 
@@ -30,8 +30,8 @@ try:
 except Exception:
     pass
 
-from src.siamese_dataset import SiameseIterableDataset, CurriculumMixedDataset, collate_siamese
-from src.model_siamese import SiameseSeiberg
+from src.dgnn_dataset import DGNNIterableDataset, CurriculumMixedDataset, collate_dgnn
+from src.model_dgnn import DGNNSeiberg
 
 # -------------------------------------------------------------
 # Logs
@@ -52,11 +52,11 @@ def resolve_log_path(logs_dir, is_resume):
     import glob
     from datetime import datetime
 
-    existing = sorted(glob.glob(os.path.join(logs_dir, "siamese_training_*.csv")))
+    existing = sorted(glob.glob(os.path.join(logs_dir, "dgnn_training_*.csv")))
     if is_resume and existing:
         return existing[-1]
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return os.path.join(logs_dir, f"siamese_training_{stamp}.csv")
+    return os.path.join(logs_dir, f"dgnn_training_{stamp}.csv")
 
 
 def save_logs(
@@ -78,7 +78,7 @@ def save_logs(
 # Arguments
 # -------------------------------------------------------------
 def parse_args():
-    parser = argparse.ArgumentParser("Train Siamese Seiberg")
+    parser = argparse.ArgumentParser("Train DGNN Seiberg")
     parser.add_argument(
         "--db",
         type=str,
@@ -131,18 +131,19 @@ def parse_args():
         "--dry_run", action="store_true", help="Run 1 epoch, 10 batches max"
     )
     parser.add_argument(
-        "--checkpoint_siamese",
+        "--checkpoint_dgnn",
         type=str,
-        default="checkpoint_siamese.pth",
-        help="Path to save/resume Siamese checkpoint",
+        default="checkpoint_dgnn.pth",
+        help="Path to save/resume DGNN checkpoint",
     )
     parser.add_argument(
         "--checkpoint_best",
         type=str,
-        default="best_siamese.pth",
+        default="best_dgnn.pth",
+        help="Path to save best checkpoint",
     )
     parser.add_argument(
-        "--resume", action="store_true", help="Resume from checkpoint_siamese"
+        "--resume", action="store_true", help="Resume from checkpoint_dgnn"
     )
     parser.add_argument(
         "--clear_history", action="store_true", help="Clear metrics when resuming"
@@ -233,7 +234,7 @@ def parse_args():
     # Logging
     parser.add_argument("--save_logs", action="store_true", help="Save CSV logs")
     parser.add_argument(
-        "--log_dir", type=str, default="logs_siamese", help="Log directory"
+        "--log_dir", type=str, default="logs_dgnn", help="Log directory"
     )
 
     return parser.parse_args()
@@ -298,7 +299,7 @@ def evaluate_model(
     return metrics, total_dist_loss / total_samples
 
 
-def update_plot(history, filename="plots/training_progress_siamese_v2.png"):
+def update_plot(history, filename="plots/training_progress_dgnn_v2.png"):
     if not history["train_loss"] or not history["val_loss"]:
         return
 
@@ -428,11 +429,11 @@ def main():
         path_nd = os.path.join(args.db, str(n), f"dist_{int(d)}")
         if not os.path.exists(path_nd):
             return None
-        ds = SiameseIterableDataset(path_nd, split=split)
+        ds = DGNNIterableDataset(path_nd, split=split)
         return DataLoader(
             ds,
             batch_size=args.batch_size,
-            collate_fn=collate_siamese,
+            collate_fn=collate_dgnn,
             num_workers=0,
             pin_memory=(device.type == "cuda"),
         )
@@ -493,7 +494,7 @@ def main():
     )
 
     # Model
-    model = SiameseSeiberg(
+    model = DGNNSeiberg(
         in_channels=1,
         hidden_channels=args.hidden_channels,
         num_gnn_layers=args.gnn_layers,
@@ -529,8 +530,8 @@ def main():
 
     if args.resume:
         resume_path = (
-            args.checkpoint_siamese
-            if os.path.exists(args.checkpoint_siamese)
+            args.checkpoint_dgnn
+            if os.path.exists(args.checkpoint_dgnn)
             else args.checkpoint_best
         )
         if os.path.exists(resume_path):
@@ -576,7 +577,7 @@ def main():
     if args.save_logs:
         log_path = resolve_log_path(args.log_dir, args.resume)
 
-    print("\nStarting Training (Siamese Continuous Distance Regressor)...")
+    print("\nStarting Training (DGNN Continuous Distance Regressor)...")
 
     try:
         for epoch in range(start_epoch, args.epochs):
@@ -672,14 +673,14 @@ def main():
                 split="train",
                 seed=42 + epoch,
                 max_yields=total_target_batches * args.batch_size,
-                autoregressive=False,
+                agnn=False,
                 pe_channels=args.pe_channels,
             )
 
             train_loader = DataLoader(
                 train_ds,
                 batch_size=args.batch_size,
-                collate_fn=collate_siamese,
+                collate_fn=collate_dgnn,
                 num_workers=args.num_workers,
                 pin_memory=(device.type == "cuda")
             )
@@ -869,7 +870,7 @@ def main():
             }
             if scheduler:
                 ckpt["scheduler_state_dict"] = scheduler.state_dict()
-            torch.save(ckpt, args.checkpoint_siamese)
+            torch.save(ckpt, args.checkpoint_dgnn)
 
             if v_met["dist_mae"] < best_dist_mae:
                 best_dist_mae = v_met["dist_mae"]
@@ -893,7 +894,7 @@ def main():
         }
         if scheduler:
             ckpt["scheduler_state_dict"] = scheduler.state_dict()
-        torch.save(ckpt, args.checkpoint_siamese)
+        torch.save(ckpt, args.checkpoint_dgnn)
 
 
 if __name__ == "__main__":

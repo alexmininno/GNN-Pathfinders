@@ -1,8 +1,8 @@
 """
-predictor_autoregressive.py
+predictor_agnn.py
 
-Predictor for Autoregressive GPS model.
-Given a pair of graphs (A, B), it computes the forward pass of the AR model
+Predictor for AGNN GPS model.
+Given a pair of graphs (A, B), it computes the forward pass of the AGNN model
 and returns the predicted probabilities/logits for the next mutation step.
 """
 
@@ -15,11 +15,11 @@ from torch_geometric.data import Data, Batch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.model_autoregressive import AutoregressiveGPS
-from src.siamese_dataset import safe_laplacian_pe
+from src.model_agnn import AGNNGPS
+from src.dgnn_dataset import safe_laplacian_pe
 
 
-class AutoregressivePredictor:
+class AGNNPredictor:
     def __init__(self, model_path, hidden_channels=128, device=None):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,9 +38,9 @@ class AutoregressivePredictor:
             in_features = classifier_weight.shape[1]
             if in_features == hidden_channels * 4 + 5: # 517 for hidden_channels=128
                 use_delta_a = False
-                print(f"AutoregressivePredictor: Detected legacy checkpoint (no delta_A). Running in backward compatibility mode.")
+                print(f"AGNNPredictor: Detected legacy checkpoint (no delta_A). Running in backward compatibility mode.")
 
-        self.model = AutoregressiveGPS(hidden_channels=hidden_channels, use_delta_a=use_delta_a).to(self.device)
+        self.model = AGNNGPS(hidden_channels=hidden_channels, use_delta_a=use_delta_a).to(self.device)
         self.model.load_state_dict(state_dict)
         self.model.eval()
 
@@ -51,7 +51,7 @@ class AutoregressivePredictor:
         
         safe_ranks = [MAX_F32 if r > MAX_F32 else (-MAX_F32 if r < -MAX_F32 else float(r)) for r in ranks]
         x = torch.tensor(safe_ranks, dtype=torch.float32).view(N, 1)
-        # Second column is a dummy (dual flag placeholder — not used by AR model)
+        # Second column is a dummy (dual flag placeholder — not used by AGNN model)
         x = torch.cat([x, torch.zeros((N, 1), dtype=torch.float32)], dim=1)
 
         safe_adj = [[MAX_F32 if a > MAX_F32 else (-MAX_F32 if a < -MAX_F32 else float(a)) for a in row] for row in adj]
@@ -97,16 +97,16 @@ class AutoregressivePredictor:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Autoregressive Predictor CLI"
+        description="AGNN Predictor CLI"
     )
-    parser.add_argument("--model", type=str, required=True, help="Path to AR checkpoint")
+    parser.add_argument("--model", type=str, required=True, help="Path to AGNN checkpoint")
     parser.add_argument("--ranks_a", type=str, required=True, help="e.g. '[1, 2, 3]'")
     parser.add_argument("--adj_a", type=str, required=True, help="e.g. '[[0,1,0],[0,0,1],[1,0,0]]'")
     parser.add_argument("--ranks_b", type=str, required=True, help="e.g. '[1, 1, 3]'")
     parser.add_argument("--adj_b", type=str, required=True, help="e.g. '[[0,0,1],[1,0,0],[0,1,0]]'")
     args = parser.parse_args()
 
-    predictor = AutoregressivePredictor(args.model)
+    predictor = AGNNPredictor(args.model)
     res = predictor.predict(
         ast.literal_eval(args.ranks_a),
         ast.literal_eval(args.adj_a),
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         ast.literal_eval(args.adj_b)
     )
 
-    print("\n--- Autoregressive Prediction ---")
+    print("\n--- AGNN Prediction ---")
     print(f"Logits:        {res['logits']}")
     print(f"Probabilities: {res['probabilities']}")
     print("-----------------------------------")

@@ -83,10 +83,10 @@ class DistanceRegressorHead(nn.Module):
         return self.mlp(features)
 
 # ---------------------------------------------------------------------------
-# Main Siamese Model
+# Main DGNN Model
 # ---------------------------------------------------------------------------
 
-class SiameseSeiberg(nn.Module):
+class DGNNSeiberg(nn.Module):
     def __init__(
         self,
         in_channels=1,
@@ -96,10 +96,10 @@ class SiameseSeiberg(nn.Module):
         nhead=4,
     ):
         """
-        Siamese Architecture: Continuous Topological Distance Regressor.
-        Fully decoupled from previous Siamese models. Built from scratch.
+        DGNN Architecture: Continuous Topological Distance Regressor.
+        Fully decoupled from previous DGNN models. Built from scratch.
         """
-        super(SiameseSeiberg, self).__init__()
+        super(DGNNSeiberg, self).__init__()
 
         # 1. Base Topological Encoder parts
         self.tokenizer = GNNTokenizer(

@@ -13,8 +13,8 @@ from torch_geometric.data import Data, Batch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Importing predictors/models
-from src.predictor_siamese import SiamesePredictor
-from src.predictor_autoregressive import AutoregressivePredictor
+from src.predictor_dgnn import DGNNPredictor
+from src.predictor_agnn import AGNNPredictor
 import heapq
 import math
 import itertools
@@ -186,7 +186,7 @@ class LCAPathfinder:
 
 class HeuristicBidirectionalPathfinder:
     def __init__(self, model_path, hidden_channels=64, device=None):
-        self.predictor = SiamesePredictor(
+        self.predictor = DGNNPredictor(
             model_path=model_path, hidden_channels=hidden_channels, device=device
         )
         self.counter = itertools.count()
@@ -444,16 +444,16 @@ class HeuristicBidirectionalPathfinder:
         }
 
 
-class AutoregressivePathfinder:
+class AGNNPathfinder:
     def __init__(self, model_path, hidden_channels=128, device=None):
-        self.ar_predictor = AutoregressivePredictor(
+        self.agnn_predictor = AGNNPredictor(
             model_path=model_path, hidden_channels=hidden_channels, device=device
         )
-        self.device = self.ar_predictor.device
+        self.device = self.agnn_predictor.device
 
     def find_path(self, ranks_a, adj_a, ranks_b, adj_b, max_steps=30, beam_width=3, enforce_anomaly_free=True):
         """
-        Beam Search from A → B using the AR model.
+        Beam Search from A → B using the AGNN model.
         """
         start_hash = get_graph_hash(ranks_a, adj_a)
         target_hash = get_graph_hash(ranks_b, adj_b)
@@ -471,17 +471,17 @@ class AutoregressivePathfinder:
         model_passes = 0
         beam = [(0.0, start_hash, ranks_a, adj_a, [])]
 
-        data_b = self.ar_predictor.get_pyg_data(ranks_b, adj_b)
+        data_b = self.agnn_predictor.get_pyg_data(ranks_b, adj_b)
         batch_b = Batch.from_data_list([data_b]).to(self.device)
 
         for depth in range(max_steps):
             new_beam = []
 
             for score, c_hash, c_ranks, c_adj, path in beam:
-                data_a = self.ar_predictor.get_pyg_data(c_ranks, c_adj)
+                data_a = self.agnn_predictor.get_pyg_data(c_ranks, c_adj)
                 batch_a = Batch.from_data_list([data_a]).to(self.device)
 
-                logits = self.ar_predictor.predict_logits_batch(batch_a, batch_b).squeeze(0)
+                logits = self.agnn_predictor.predict_logits_batch(batch_a, batch_b).squeeze(0)
                 model_passes += 1
 
                 probs = torch.softmax(logits, dim=-1)
@@ -528,7 +528,7 @@ class AutoregressivePathfinder:
 
 
 class HybridBidirectionalPathfinder:
-    def __init__(self, siamese_model_path, ar_model_path, hidden_channels_siamese=64, hidden_channels_ar=128, device=None):
+    def __init__(self, dgnn_model_path, agnn_model_path, hidden_channels_dgnn=64, hidden_channels_agnn=128, device=None):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if not torch.cuda.is_available() and torch.backends.mps.is_available():
@@ -536,20 +536,20 @@ class HybridBidirectionalPathfinder:
         else:
             self.device = device
             
-        # print(f"Loading Siamese model from {siamese_model_path} onto {self.device}")
-        self.predictor = SiamesePredictor(
-            model_path=siamese_model_path, hidden_channels=hidden_channels_siamese, device=self.device
+        # print(f"Loading DGNN model from {dgnn_model_path} onto {self.device}")
+        self.predictor = DGNNPredictor(
+            model_path=dgnn_model_path, hidden_channels=hidden_channels_dgnn, device=self.device
         )
         
-        self.ar_predictor = AutoregressivePredictor(
-            model_path=ar_model_path, hidden_channels=hidden_channels_ar, device=self.device
+        self.agnn_predictor = AGNNPredictor(
+            model_path=agnn_model_path, hidden_channels=hidden_channels_agnn, device=self.device
         )
         
         self.counter = itertools.count()
 
     def _expand_frontier(
         self, pq, visited, other_visited, this_wl_map, other_wl_map, target_ranks, target_adj, target_batch, max_steps,
-        lambda_ar, top_k, enforce_anomaly_free=True, is_forward=True,
+        lambda_agnn, top_k, enforce_anomaly_free=True, is_forward=True,
     ):
         if not pq:
             return None
@@ -573,11 +573,11 @@ class HybridBidirectionalPathfinder:
                     bwd_md5 = other_md5 if is_forward else c_hash
                     return fwd_md5, bwd_md5, mapping
 
-        # 1. Run AR model to get action probabilities
-        data_c = self.ar_predictor.get_pyg_data(c_ranks, c_adj)
+        # 1. Run AGNN model to get action probabilities
+        data_c = self.agnn_predictor.get_pyg_data(c_ranks, c_adj)
         batch_c = Batch.from_data_list([data_c]).to(self.device)
         
-        logits = self.ar_predictor.predict_logits_batch(batch_c, target_batch).squeeze(0) # [N_max]
+        logits = self.agnn_predictor.predict_logits_batch(batch_c, target_batch).squeeze(0) # [N_max]
         probs = torch.softmax(logits, dim=-1)
         
         n_nodes = len(c_ranks)
@@ -637,7 +637,7 @@ class HybridBidirectionalPathfinder:
         if not valid_mutants_ranks:
             return None
 
-        # 2. Run Siamese model for heuristics
+        # 2. Run DGNN model for heuristics
         h_scores = self.predictor.predict_batch(
             lists_of_ranks_a=valid_mutants_ranks,
             lists_of_adj_a=valid_mutants_adj,
@@ -649,8 +649,8 @@ class HybridBidirectionalPathfinder:
             h_score = h_scores[idx]
             p_val = max(valid_mutants_p[idx], 1e-12) # prevent log(0)
             
-            # AR guided step cost: penalizes low probability moves
-            step_cost = 1.0 - lambda_ar * math.log(p_val)
+            # AGNN guided step cost: penalizes low probability moves
+            step_cost = 1.0 - lambda_agnn * math.log(p_val)
             
             new_g_score = g_score + step_cost
             new_f_score = new_g_score + h_score
@@ -666,7 +666,7 @@ class HybridBidirectionalPathfinder:
         return None
 
     def find_path(self, ranks_a, adj_a, ranks_b, adj_b, max_steps=50, max_nodes=100000,
-                  enforce_anomaly_free=True, lambda_ar=1.0, top_k=None):
+                  enforce_anomaly_free=True, lambda_agnn=1.0, top_k=None):
         if len(ranks_a) != len(ranks_b):
             return {
                 "path": None,
@@ -694,10 +694,10 @@ class HybridBidirectionalPathfinder:
 
         half_budget = max_steps // 2
         
-        target_data_fwd = self.ar_predictor.get_pyg_data(ranks_b, adj_b)
+        target_data_fwd = self.agnn_predictor.get_pyg_data(ranks_b, adj_b)
         target_batch_fwd = Batch.from_data_list([target_data_fwd]).to(self.device)
 
-        target_data_bwd = self.ar_predictor.get_pyg_data(ranks_a, adj_a)
+        target_data_bwd = self.agnn_predictor.get_pyg_data(ranks_a, adj_a)
         target_batch_bwd = Batch.from_data_list([target_data_bwd]).to(self.device)
 
         # Forward frontier: A → B
@@ -737,13 +737,13 @@ class HybridBidirectionalPathfinder:
                 meeting = self._expand_frontier(
                     fwd_pq, fwd_visited, bwd_visited, fwd_wl_map, bwd_wl_map,
                     ranks_b, adj_b, target_batch_fwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free, True
+                    half_budget, lambda_agnn, top_k, enforce_anomaly_free, True
                 )
             else:
                 meeting = self._expand_frontier(
                     bwd_pq, bwd_visited, fwd_visited, bwd_wl_map, fwd_wl_map,
                     ranks_a, adj_a, target_batch_bwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free, False
+                    half_budget, lambda_agnn, top_k, enforce_anomaly_free, False
                 )
 
             total_visited = len(fwd_visited) + len(bwd_visited)
@@ -796,7 +796,7 @@ class HybridBidirectionalPathfinder:
 
 
 class HybridLCAPathfinder:
-    def __init__(self, siamese_model_path, ar_model_path, hidden_channels_siamese=64, hidden_channels_ar=128, device=None):
+    def __init__(self, dgnn_model_path, agnn_model_path, hidden_channels_dgnn=64, hidden_channels_agnn=128, device=None):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if not torch.cuda.is_available() and torch.backends.mps.is_available():
@@ -804,21 +804,21 @@ class HybridLCAPathfinder:
         else:
             self.device = device
             
-        # print(f"Loading Siamese model from {siamese_model_path} onto {self.device}")
-        self.predictor = SiamesePredictor(
-            model_path=siamese_model_path, hidden_channels=hidden_channels_siamese, device=self.device
+        # print(f"Loading DGNN model from {dgnn_model_path} onto {self.device}")
+        self.predictor = DGNNPredictor(
+            model_path=dgnn_model_path, hidden_channels=hidden_channels_dgnn, device=self.device
         )
         
-        self.ar_predictor = AutoregressivePredictor(
-            model_path=ar_model_path, hidden_channels=hidden_channels_ar, device=self.device
+        self.agnn_predictor = AGNNPredictor(
+            model_path=agnn_model_path, hidden_channels=hidden_channels_agnn, device=self.device
         )
         
         self.counter = itertools.count()
 
     def _expand_frontier(
         self, pq, visited, other_visited, this_wl_map, other_wl_map, target_ranks, target_adj, target_batch, max_steps,
-        lambda_ar, top_k, enforce_anomaly_free=True, initial_rank_sum=None,
-        lambda_det_cost=0.0, lambda_siamese_h=1.0, lambda_lca_h=0.0,
+        lambda_agnn, top_k, enforce_anomaly_free=True, initial_rank_sum=None,
+        lambda_det_cost=0.0, lambda_dgnn_h=1.0, lambda_lca_h=0.0,
         cost_decrease=0.5, cost_equal=1.0, cost_increase=5.0, is_forward=True
     ):
         if not pq:
@@ -843,11 +843,11 @@ class HybridLCAPathfinder:
                     bwd_md5 = other_md5 if is_forward else c_hash
                     return fwd_md5, bwd_md5, mapping
 
-        # 1. Run AR model to get action probabilities
-        data_c = self.ar_predictor.get_pyg_data(c_ranks, c_adj)
+        # 1. Run AGNN model to get action probabilities
+        data_c = self.agnn_predictor.get_pyg_data(c_ranks, c_adj)
         batch_c = Batch.from_data_list([data_c]).to(self.device)
         
-        logits = self.ar_predictor.predict_logits_batch(batch_c, target_batch).squeeze(0) # [N_max]
+        logits = self.agnn_predictor.predict_logits_batch(batch_c, target_batch).squeeze(0) # [N_max]
         probs = torch.softmax(logits, dim=-1)
         
         n_nodes = len(c_ranks)
@@ -907,19 +907,19 @@ class HybridLCAPathfinder:
         if not valid_mutants_ranks:
             return None
 
-        # 2. Run Siamese model for heuristics
-        if lambda_siamese_h > 0.0:
-            h_siamese_scores = self.predictor.predict_batch(
+        # 2. Run DGNN model for heuristics
+        if lambda_dgnn_h > 0.0:
+            h_dgnn_scores = self.predictor.predict_batch(
                 lists_of_ranks_a=valid_mutants_ranks,
                 lists_of_adj_a=valid_mutants_adj,
                 ranks_b=target_ranks,
                 adj_b=target_adj,
             )
         else:
-            h_siamese_scores = [0.0] * len(valid_mutants_ranks)
+            h_dgnn_scores = [0.0] * len(valid_mutants_ranks)
 
         for idx in range(len(valid_mutants_ranks)):
-            h_siamese = h_siamese_scores[idx]
+            h_dgnn = h_dgnn_scores[idx]
             p_val = max(valid_mutants_p[idx], 1e-12) # prevent log(0)
             
             k = valid_mutants_k[idx]
@@ -935,8 +935,8 @@ class HybridLCAPathfinder:
                 
             base_cost = (1.0 - lambda_det_cost) * 1.0 + lambda_det_cost * det_base
             
-            # AR guided step cost: penalizes low probability moves
-            step_cost = base_cost - lambda_ar * math.log(p_val)
+            # AGNN guided step cost: penalizes low probability moves
+            step_cost = base_cost - lambda_agnn * math.log(p_val)
             
             new_g_score = g_score + step_cost
             
@@ -948,7 +948,7 @@ class HybridLCAPathfinder:
             else:
                 rank_penalty = 0.0
                 
-            h_score = lambda_siamese_h * h_siamese + lambda_lca_h * rank_penalty
+            h_score = lambda_dgnn_h * h_dgnn + lambda_lca_h * rank_penalty
             
             new_f_score = new_g_score + h_score
 
@@ -963,8 +963,8 @@ class HybridLCAPathfinder:
         return None
 
     def find_path(self, ranks_a, adj_a, ranks_b, adj_b, max_steps=50, max_nodes=100000,
-                  enforce_anomaly_free=True, lambda_ar=1.0, top_k=None,
-                  lambda_det_cost=0.0, lambda_siamese_h=1.0, lambda_lca_h=0.0,
+                  enforce_anomaly_free=True, lambda_agnn=1.0, top_k=None,
+                  lambda_det_cost=0.0, lambda_dgnn_h=1.0, lambda_lca_h=0.0,
                   cost_decrease=0.5, cost_equal=1.0, cost_increase=5.0):
         if len(ranks_a) != len(ranks_b):
             return {
@@ -993,10 +993,10 @@ class HybridLCAPathfinder:
 
         half_budget = max_steps // 2
         
-        target_data_fwd = self.ar_predictor.get_pyg_data(ranks_b, adj_b)
+        target_data_fwd = self.agnn_predictor.get_pyg_data(ranks_b, adj_b)
         target_batch_fwd = Batch.from_data_list([target_data_fwd]).to(self.device)
 
-        target_data_bwd = self.ar_predictor.get_pyg_data(ranks_a, adj_a)
+        target_data_bwd = self.agnn_predictor.get_pyg_data(ranks_a, adj_a)
         target_batch_bwd = Batch.from_data_list([target_data_bwd]).to(self.device)
 
         # Forward frontier: A → B
@@ -1005,10 +1005,10 @@ class HybridLCAPathfinder:
         }
         fwd_wl_map = defaultdict(list)
         fwd_wl_map[start_wl_hash].append(start_hash)
-        h_siamese_fwd = self.predictor.predict(ranks_a, adj_a, ranks_b, adj_b)["estimated_distance"]
+        h_dgnn_fwd = self.predictor.predict(ranks_a, adj_a, ranks_b, adj_b)["estimated_distance"]
         initial_sum_a = sum(ranks_a)
         rank_penalty_fwd = sum(ranks_a) / initial_sum_a if initial_sum_a > 0 else 1.0
-        h_fwd = lambda_siamese_h * h_siamese_fwd + lambda_lca_h * rank_penalty_fwd
+        h_fwd = lambda_dgnn_h * h_dgnn_fwd + lambda_lca_h * rank_penalty_fwd
         fwd_pq = []
         heapq.heappush(fwd_pq, (h_fwd, next(self.counter), (0, ranks_a, adj_a, [])))
 
@@ -1018,10 +1018,10 @@ class HybridLCAPathfinder:
         }
         bwd_wl_map = defaultdict(list)
         bwd_wl_map[target_wl_hash].append(target_hash)
-        h_siamese_bwd = self.predictor.predict(ranks_b, adj_b, ranks_a, adj_a)["estimated_distance"]
+        h_dgnn_bwd = self.predictor.predict(ranks_b, adj_b, ranks_a, adj_a)["estimated_distance"]
         initial_sum_b = sum(ranks_b)
         rank_penalty_bwd = sum(ranks_b) / initial_sum_b if initial_sum_b > 0 else 1.0
-        h_bwd = lambda_siamese_h * h_siamese_bwd + lambda_lca_h * rank_penalty_bwd
+        h_bwd = lambda_dgnn_h * h_dgnn_bwd + lambda_lca_h * rank_penalty_bwd
         bwd_pq = []
         heapq.heappush(bwd_pq, (h_bwd, next(self.counter), (0, ranks_b, adj_b, [])))
 
@@ -1042,16 +1042,16 @@ class HybridLCAPathfinder:
                 meeting = self._expand_frontier(
                     fwd_pq, fwd_visited, bwd_visited, fwd_wl_map, bwd_wl_map,
                     ranks_b, adj_b, target_batch_fwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free,
-                    initial_sum_a, lambda_det_cost, lambda_siamese_h, lambda_lca_h,
+                    half_budget, lambda_agnn, top_k, enforce_anomaly_free,
+                    initial_sum_a, lambda_det_cost, lambda_dgnn_h, lambda_lca_h,
                     cost_decrease, cost_equal, cost_increase, True
                 )
             else:
                 meeting = self._expand_frontier(
                     bwd_pq, bwd_visited, fwd_visited, bwd_wl_map, fwd_wl_map,
                     ranks_a, adj_a, target_batch_bwd,
-                    half_budget, lambda_ar, top_k, enforce_anomaly_free,
-                    initial_sum_b, lambda_det_cost, lambda_siamese_h, lambda_lca_h,
+                    half_budget, lambda_agnn, top_k, enforce_anomaly_free,
+                    initial_sum_b, lambda_det_cost, lambda_dgnn_h, lambda_lca_h,
                     cost_decrease, cost_equal, cost_increase, False
                 )
 
@@ -1110,8 +1110,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified Pathfinder for Seiberg Duality")
     
     # Execution flags
-    parser.add_argument("--siamese", action="store_true", help="Run Siamese A* Pathfinder")
-    parser.add_argument("--ar", action="store_true", help="Run Autoregressive Beam Search Pathfinder")
+    parser.add_argument("--dgnn", action="store_true", help="Run DGNN A* Pathfinder")
+    parser.add_argument("--agnn", action="store_true", help="Run AGNN Beam Search Pathfinder")
     parser.add_argument("--hybrid", action="store_true", help="Run Hybrid Bidirectional A* Pathfinder")
     parser.add_argument("--lca", action="store_true", help="Run Heuristic (LCA) Bidirectional A* Pathfinder")
     parser.add_argument("--hybrid_lca", action="store_true", help="Run Deterministic Hybrid Bidirectional A* Pathfinder")
@@ -1124,20 +1124,20 @@ if __name__ == "__main__":
     parser.add_argument("--adj_b", type=str, required=True, help="Adjacency matrix for Graph B. Example: --adj_b '[[0,0,1],[1,0,0],[0,1,0]]'")
     
     # Models
-    parser.add_argument("--siamese_model", type=str, default="", help="Path to Siamese .pth checkpoint. Example: --siamese_model $CHECKPOINTS_DIR/best_siamese.pth")
-    parser.add_argument("--ar_model", type=str, default="", help="Path to AR .pth checkpoint. Example: --ar_model $CHECKPOINTS_DIR/best_auto.pth")
+    parser.add_argument("--dgnn_model", type=str, default="", help="Path to DGNN .pth checkpoint. Example: --dgnn_model $CHECKPOINTS_DIR/best_dgnn.pth")
+    parser.add_argument("--agnn_model", type=str, default="", help="Path to AGNN .pth checkpoint. Example: --agnn_model $CHECKPOINTS_DIR/best_agnn.pth")
     
     # Hyperparameters
     parser.add_argument("--max_steps", type=int, default=50, help="Maximum total search depth. Example: --max_steps 50")
     parser.add_argument("--max_nodes", type=int, default=100000, help="Maximum nodes to explore before aborting. Example: --max_nodes 100000")
-    parser.add_argument("--beam_width", type=int, default=3, help="Beam width for AR search. Example: --beam_width 3")
+    parser.add_argument("--beam_width", type=int, default=3, help="Beam width for AGNN search. Example: --beam_width 3")
     parser.add_argument("--relax_anomaly", action="store_true", help="Skip the anomaly-free check (N_f_in == N_f_out)")
     
-    parser.add_argument("--lambda_ar", type=float, default=1.0, help="Weight for AR log-prob penalty in hybrid search. Example: --lambda_ar 1.0")
-    parser.add_argument("--top_k", type=int, default=None, help="Filter actions to only top K predicted by AR model. Example: --top_k 5")
+    parser.add_argument("--lambda_agnn", type=float, default=1.0, help="Weight for AGNN log-prob penalty in hybrid search. Example: --lambda_agnn 1.0")
+    parser.add_argument("--top_k", type=int, default=None, help="Filter actions to only top K predicted by AGNN model. Example: --top_k 5")
     
     parser.add_argument("--lambda_det_cost", type=float, default=0.0, help="Weight for deterministic step cost in Hybrid LCA. Example: --lambda_det_cost 0.5")
-    parser.add_argument("--lambda_siamese_h", type=float, default=1.0, help="Weight for Siamese heuristic. Example: --lambda_siamese_h 1.0")
+    parser.add_argument("--lambda_dgnn_h", type=float, default=1.0, help="Weight for DGNN heuristic. Example: --lambda_dgnn_h 1.0")
     parser.add_argument("--lambda_lca_h", type=float, default=0.0, help="Weight for LCA heuristic. Example: --lambda_lca_h 1.0")
     
     parser.add_argument("--cost_decrease", type=float, default=0.5, help="Cost multiplier for rank decrease. Example: --cost_decrease 0.5")
@@ -1152,7 +1152,7 @@ if __name__ == "__main__":
     adj_b = ast.literal_eval(args.adj_b)
     
     # If no specific method is chosen, run all of them
-    run_all = not (args.siamese or args.ar or args.hybrid or args.lca or args.hybrid_lca or args.det)
+    run_all = not (args.dgnn or args.agnn or args.hybrid or args.lca or args.hybrid_lca or args.det)
     
     print(f"Running Find Path...")
     print(f"Start Graph Ranks: {ranks_a}")

@@ -67,7 +67,7 @@ def safe_laplacian_pe(data, k=8):
     data.is_valid = True
     return data
 
-def process_siamese_chunk(chunk_data, k=8):
+def process_dgnn_chunk(chunk_data, k=8):
     """
     Strips metadata, casts to float32, and applies PE transform if provided.
     Filters out any pair where Laplacian PE failed.
@@ -114,9 +114,9 @@ def process_siamese_chunk(chunk_data, k=8):
             
     return processed_samples
 
-def process_autoregressive_chunk(chunk_data, k=8):
+def process_agnn_chunk(chunk_data, k=8):
     """
-    Refines pairs for Autoregressive classification.
+    Refines pairs for AGNN classification.
     Target is the first node index in the mutation sequence (0-indexed).
     Does NOT filter by distance; extracts seq[0] for all provided samples.
     Filters out any pair where Laplacian PE failed.
@@ -171,9 +171,9 @@ def process_autoregressive_chunk(chunk_data, k=8):
     return processed_samples
 
 
-class SiameseIterableDataset(IterableDataset):
+class DGNNIterableDataset(IterableDataset):
     """
-    Offline Static Siamese Dataset.
+    Offline Static DGNN Dataset.
     Loads graph pairs and provides:
     - Graph A & Graph B
     - Topological Distance
@@ -229,7 +229,7 @@ class SiameseIterableDataset(IterableDataset):
                 with open(chunk_path, 'rb') as f:
                     chunk_data = torch.load(f, map_location="cpu", weights_only=False)
                 
-                chunk_data = process_siamese_chunk(chunk_data, k=8)
+                chunk_data = process_dgnn_chunk(chunk_data, k=8)
 
             except Exception as e:
                 print(f"Error loading {chunk_path}: {e}")
@@ -243,7 +243,7 @@ class SiameseIterableDataset(IterableDataset):
                 yield g_a, g_b, torch.as_tensor(dist, dtype=torch.float32), torch.as_tensor(seq, dtype=torch.long)
 
 
-def collate_siamese(batch):
+def collate_dgnn(batch):
     """
     Takes a list of tuples: (graph_a, graph_b, distance, sequence)
     Instead of returning a padded sequence of tokens, it returns a 
@@ -279,9 +279,9 @@ def collate_siamese(batch):
     return batch_a, batch_b, distances.unsqueeze(1), flat_target_counts, padded_target_counts
 
 
-def collate_autoregressive(batch, explosion_threshold=1e6):
+def collate_agnn(batch, explosion_threshold=1e6):
     """
-    Collate for Autoregressive classification.
+    Collate for AGNN classification.
     Returns (batch_a, batch_b, target_node_indices, action_mask)
     """
     from torch_geometric.utils import to_dense_batch
@@ -324,13 +324,13 @@ def collate_autoregressive(batch, explosion_threshold=1e6):
 
 
 class CurriculumMixedDataset(IterableDataset):
-    def __init__(self, quotas, db_path, split="train", seed=42, max_yields=None, autoregressive=False, pe_channels=8):
+    def __init__(self, quotas, db_path, split="train", seed=42, max_yields=None, agnn=False, pe_channels=8):
         self.quotas = quotas
         self.db_path = db_path
         self.split = split
         self.seed = seed
         self.max_yields = max_yields
-        self.autoregressive = autoregressive
+        self.agnn = agnn
         self.pe_channels = pe_channels
         
         self._populate_chunk_map()
@@ -426,10 +426,10 @@ class CurriculumMixedDataset(IterableDataset):
                 with open(chunk_path, 'rb') as f:
                     chunk_data = torch.load(f, map_location="cpu", weights_only=False)
                 
-                if self.autoregressive:
-                    chunk_data = process_autoregressive_chunk(chunk_data, k=self.pe_channels)
+                if self.agnn:
+                    chunk_data = process_agnn_chunk(chunk_data, k=self.pe_channels)
                 else:
-                    chunk_data = process_siamese_chunk(chunk_data, k=self.pe_channels)
+                    chunk_data = process_dgnn_chunk(chunk_data, k=self.pe_channels)
             except Exception as e:
                 print(f"  [!] Chunk load failed ({chunk_path}): {e}")
                 continue
@@ -445,7 +445,7 @@ class CurriculumMixedDataset(IterableDataset):
                 sample = chunk_data.pop()
                 yielded_count += 1
                 
-                if self.autoregressive:
+                if self.agnn:
                     g_a, g_b, target, dist = sample
                     yield g_a, g_b, target, dist
                 else:

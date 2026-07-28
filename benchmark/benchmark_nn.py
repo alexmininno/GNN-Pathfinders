@@ -23,9 +23,9 @@ import numpy as np
 import matplotlib.colors as mcolors
 from torch_geometric.data import Data, Batch
 from torch.nn.utils.rnn import pad_sequence
-from src.model_autoregressive import AutoregressiveGPS
-from src.siamese_dataset import safe_laplacian_pe
-from src.model_siamese import SiameseSeiberg
+from src.model_agnn import AGNNGPS
+from src.dgnn_dataset import safe_laplacian_pe
+from src.model_dgnn import DGNNSeiberg
 
 try:
     from scripts.plot_style import JHEPPlot, get_latex_name
@@ -375,8 +375,8 @@ def pyg_to_ranks_adj(data):
     return ranks, adj.tolist()
 
 
-def permute_siamese_graph(data):
-    """Apply a random node permutation to a PyG Data object for Siamese evaluation (no PE)."""
+def permute_dgnn_graph(data):
+    """Apply a random node permutation to a PyG Data object for DGNN evaluation (no PE)."""
     import torch
     from torch_geometric.data import Data
     N = data.num_nodes
@@ -397,7 +397,7 @@ def permute_siamese_graph(data):
 
 def evaluate_deterministic_and_permutation(batch_pairs, dist_pred, model, device, max_deter_steps=1000):
     """
-    Evaluates 3-way distance benchmark (Siamese d_pred vs Database d_data vs Deterministic d_true)
+    Evaluates 3-way distance benchmark (DGNN d_pred vs Database d_data vs Deterministic d_true)
     and permutation invariance under node relabeling on the exact same test pairs.
     """
     import torch
@@ -409,8 +409,8 @@ def evaluate_deterministic_and_permutation(batch_pairs, dist_pred, model, device
     perm_b_list = []
 
     for g_a, g_b, true_d, nc, fid in batch_pairs:
-        perm_a_list.append(permute_siamese_graph(g_a))
-        perm_b_list.append(permute_siamese_graph(g_b))
+        perm_a_list.append(permute_dgnn_graph(g_a))
+        perm_b_list.append(permute_dgnn_graph(g_b))
 
     batch_a_perm = Batch.from_data_list(perm_a_list).to(device)
     batch_b_perm = Batch.from_data_list(perm_b_list).to(device)
@@ -457,7 +457,7 @@ def _process_deterministic_benchmark(df_deter, args):
     import numpy as np
 
     output_dir = args.output_dir
-    detailed_csv = os.path.join(output_dir, "siamese_deterministic_benchmark_detailed.csv")
+    detailed_csv = os.path.join(output_dir, "dgnn_deterministic_benchmark_detailed.csv")
     df_deter.to_csv(detailed_csv, index=False)
     print(f"\nDetailed 3-way deterministic benchmark saved to {detailed_csv}")
 
@@ -502,7 +502,7 @@ def _process_deterministic_benchmark(df_deter, args):
             "max_perm_shift": round(sub["delta_perm"].max(), 6),
         })
     df_sum = pd.DataFrame(summary_rows)
-    summary_csv = os.path.join(output_dir, "siamese_deterministic_benchmark_summary.csv")
+    summary_csv = os.path.join(output_dir, "dgnn_deterministic_benchmark_summary.csv")
     df_sum.to_csv(summary_csv, index=False)
     print(f"Summary statistics saved to {summary_csv}")
 
@@ -524,24 +524,24 @@ def _process_deterministic_benchmark(df_deter, args):
         ax.set_xlabel("Database Distance ($d_{\\rm data}$)")
         ax.set_ylabel("Mean Absolute Error")
         if wl:
-            ax.set_title("Siamese MAE: Database vs. Deterministic Shortest Path")
+            ax.set_title("DGNN MAE: Database vs. Deterministic Shortest Path")
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(output_dir, "siamese_mae_comparison"))
+        jp.save(os.path.join(output_dir, "dgnn_mae_comparison"))
 
 
 def run_inference(args):
     """Run model on all test pairs, save predictions CSV, generate plots."""
     import torch
     from torch_geometric.data import Batch
-    from src.model_siamese import SiameseSeiberg
+    from src.model_dgnn import DGNNSeiberg
 
     print(f"Loading model from {args.checkpoint}...")
     device = torch.device("cpu")
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
-    dim_fallback = getattr(args, "hidden_channels_siamese", 64)
-    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "Siamese")
-    model = SiameseSeiberg(hidden_channels=hidden_dim)
+    dim_fallback = getattr(args, "hidden_channels_dgnn", 64)
+    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "DGNN")
+    model = DGNNSeiberg(hidden_channels=hidden_dim)
     model.load_state_dict(state_dict, strict=False)
     model.to(device).eval()
 
@@ -579,17 +579,17 @@ def run_inference(args):
             # Forward pass
             dist_pred = model(batch_a, batch_b).view(-1).cpu().numpy()
             
-            if args.evaluate_monotonicity_siamese:
+            if args.evaluate_monotonicity_dgnn:
                 mono_batch = evaluate_monotonicity(batch_pairs, dist_pred, model, device)
                 mono_results_all.extend(mono_batch)
 
-            if getattr(args, "evaluate_deterministic_benchmark_siamese", False) or getattr(args, "evaluate_deterministic_benchmark", False):
-                max_steps = getattr(args, "max_deter_steps_siamese", None) or getattr(args, "max_deter_steps", 1000)
+            if getattr(args, "evaluate_deterministic_benchmark_dgnn", False) or getattr(args, "evaluate_deterministic_benchmark", False):
+                max_steps = getattr(args, "max_deter_steps_dgnn", None) or getattr(args, "max_deter_steps", 1000)
                 deter_batch = evaluate_deterministic_and_permutation(batch_pairs, dist_pred, model, device, max_steps)
                 deter_results_all.extend(deter_batch)
 
             # Optionally extract embeddings
-            if args.extract_embeddings_siamese:
+            if args.extract_embeddings_dgnn:
                 h_a, h_b, z_a, z_b = model.encode_graphs(batch_a, batch_b)
                 embeddings_a.append(z_a.cpu().numpy())
                 embeddings_b.append(z_b.cpu().numpy())
@@ -602,7 +602,7 @@ def run_inference(args):
                     "abs_error": round(abs(pred_d - true_d), 4),
                     "family_uuid": fid,
                 })
-                if args.extract_embeddings_siamese:
+                if args.extract_embeddings_dgnn:
                     embed_meta.append({"node_count": nc, "true_distance": int(true_d),
                                        "family_uuid": fid, "role": "pair"})
 
@@ -613,14 +613,14 @@ def run_inference(args):
     print(f"\nPredictions saved to {csv_path}")
 
     df_mono = pd.DataFrame()
-    if args.evaluate_monotonicity_siamese and mono_results_all:
+    if args.evaluate_monotonicity_dgnn and mono_results_all:
         df_mono = pd.DataFrame(mono_results_all)
         mono_csv = os.path.join(args.output_dir, "monotonicity_eval.csv")
         df_mono.to_csv(mono_csv, index=False)
         print(f"Monotonicity evaluations saved to {mono_csv}")
 
     # Save embeddings
-    if args.extract_embeddings_siamese and embeddings_a:
+    if args.extract_embeddings_dgnn and embeddings_a:
         emb_a = np.concatenate(embeddings_a, axis=0)
         emb_b = np.concatenate(embeddings_b, axis=0)
         npz_path = os.path.join(args.output_dir, "embeddings.npz")
@@ -632,13 +632,13 @@ def run_inference(args):
     _generate_inference_plots(df, args)
 
     # Generate embedding plots if available
-    if args.extract_embeddings_siamese and embeddings_a:
+    if args.extract_embeddings_dgnn and embeddings_a:
         _generate_embedding_plots(emb_a, emb_b, embed_meta, args)
         
-    if args.evaluate_monotonicity_siamese and not df_mono.empty:
+    if args.evaluate_monotonicity_dgnn and not df_mono.empty:
         _generate_monotonicity_plots(df_mono, args)
 
-    if (getattr(args, "evaluate_deterministic_benchmark_siamese", False) or getattr(args, "evaluate_deterministic_benchmark", False)) and deter_results_all:
+    if (getattr(args, "evaluate_deterministic_benchmark_dgnn", False) or getattr(args, "evaluate_deterministic_benchmark", False)) and deter_results_all:
         df_deter = pd.DataFrame(deter_results_all)
         _process_deterministic_benchmark(df_deter, args)
 
@@ -921,19 +921,19 @@ def _generate_embedding_plots(emb_a, emb_b, meta, args):
 #  Latency benchmark
 # ═══════════════════════════════════════════════════════════════
 
-def run_siamese_latency_benchmark(args):
+def run_dgnn_latency_benchmark(args):
     """Time forward passes at various batch sizes."""
     import torch
     from torch_geometric.data import Data, Batch
-    from src.model_siamese import SiameseSeiberg
+    from src.model_dgnn import DGNNSeiberg
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
-    dim_fallback = getattr(args, "hidden_channels_siamese", 64)
-    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "Siamese")
-    model = SiameseSeiberg(hidden_channels=hidden_dim)
+    dim_fallback = getattr(args, "hidden_channels_dgnn", 64)
+    hidden_dim = get_checkpoint_hidden_channels(state_dict, dim_fallback, "DGNN")
+    model = DGNNSeiberg(hidden_channels=hidden_dim)
     model.load_state_dict(state_dict, strict=False)
     model.to(device).eval()
 
@@ -1114,7 +1114,7 @@ class BenchmarkDataset(torch.utils.data.IterableDataset):
                 continue
 
 
-def collate_ar_benchmark(batch, explosion_threshold=1e6):
+def collate_agnn_benchmark(batch, explosion_threshold=1e6):
     g_a_list, g_b_list, targets, dists, nodes_list, true_dists, family_ids = (
         [],
         [],
@@ -1344,7 +1344,7 @@ def run_accuracy_benchmark(model, device, args):
         dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        collate_fn=collate_ar_benchmark,
+        collate_fn=collate_agnn_benchmark,
         pin_memory=(device.type == "cuda"),
     )
 
@@ -1376,7 +1376,7 @@ def run_accuracy_benchmark(model, device, args):
                     .tolist()
                 )
                 
-                if args.evaluate_policy_margin_ar:
+                if args.evaluate_policy_margin_agnn:
                     probs = torch.softmax(logits, dim=-1)
                     p_correct = probs[torch.arange(len(targets)), targets]
                     
@@ -1483,7 +1483,7 @@ def run_accuracy_benchmark(model, device, args):
         inplace=True,
     )
 
-    stats_path = os.path.join(args.output_dir, "ar_accuracy_stats.csv")
+    stats_path = os.path.join(args.output_dir, "agnn_accuracy_stats.csv")
     agg_df.to_csv(stats_path, index=False)
     print(f"Accuracy stats saved to {stats_path}")
 
@@ -1503,10 +1503,10 @@ def run_accuracy_benchmark(model, device, args):
         pivot = agg_df.pivot(index="nodes", columns="true_distance", values="top1_acc")
         sns.heatmap(pivot, annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1, ax=ax)
         if not is_045:
-            ax.set_title("AR Top-1 Next-Step Accuracy")
+            ax.set_title("AGNN Top-1 Next-Step Accuracy")
             ax.set_xlabel("True Distance")
             ax.set_ylabel("Nodes (N)")
-        jp.save(os.path.join(args.output_dir, "ar_top1_heatmap.png"))
+        jp.save(os.path.join(args.output_dir, "agnn_top1_heatmap.png"))
 
         # 2. Accuracy by distance
         fig, ax = jp.create_figure()
@@ -1529,7 +1529,7 @@ def run_accuracy_benchmark(model, device, args):
             ax.set_xlabel("True Distance")
             ax.set_ylabel("Accuracy")
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(args.output_dir, "ar_acc_by_distance.png"))
+        jp.save(os.path.join(args.output_dir, "agnn_acc_by_distance.png"))
 
         # 3. Accuracy by family
         fig, ax = jp.create_figure()
@@ -1573,7 +1573,7 @@ def run_accuracy_benchmark(model, device, args):
         if not is_045:
             ax.set_title("Top-1 Accuracy by Theory Family")
             ax.set_xlabel("Accuracy")
-        jp.save(os.path.join(args.output_dir, "ar_acc_by_family.png"))
+        jp.save(os.path.join(args.output_dir, "agnn_acc_by_family.png"))
 
         # 4. Valid Physics Rate by distance
         fig, ax = jp.create_figure()
@@ -1585,7 +1585,7 @@ def run_accuracy_benchmark(model, device, args):
             ax.set_title("Unmasked Physical Validity Rate by Distance")
             ax.set_xlabel("True Distance")
             ax.set_ylabel("Validity Rate")
-        jp.save(os.path.join(args.output_dir, "ar_physics_validity.png"))
+        jp.save(os.path.join(args.output_dir, "agnn_physics_validity.png"))
 
         # 5. Cross Entropy by distance
         fig, ax = jp.create_figure()
@@ -1594,10 +1594,10 @@ def run_accuracy_benchmark(model, device, args):
             ax.set_title("Cross-Entropy Loss by Distance")
             ax.set_xlabel("True Distance")
             ax.set_ylabel("Cross-Entropy Loss")
-        jp.save(os.path.join(args.output_dir, "ar_cross_entropy.png"))
+        jp.save(os.path.join(args.output_dir, "agnn_cross_entropy.png"))
 
         # 6. Policy Margin plots
-        if args.evaluate_policy_margin_ar:
+        if args.evaluate_policy_margin_agnn:
             for k, color in zip([1, 2, 3], [jp.prcolor, jp.seccolor, jp.tercolor]):
                 # Standalone histograms
                 fig, ax = jp.create_figure()
@@ -1611,7 +1611,7 @@ def run_accuracy_benchmark(model, device, args):
                     ax.set_xlabel(rf"Probability Margin ($P_{{\text{{predicted}}}} - P_{{{k}\text{{-th\_best\_incorrect}}}}$)")
                     ax.set_ylabel("Samples")
                 jp.add_legend(ax=ax)
-                jp.save(os.path.join(args.output_dir, f"ar_policy_margin_top{k}_hist.png"))
+                jp.save(os.path.join(args.output_dir, f"agnn_policy_margin_top{k}_hist.png"))
 
             # Overlaid histograms (merged)
             fig, ax = jp.create_figure()
@@ -1623,7 +1623,7 @@ def run_accuracy_benchmark(model, device, args):
                 ax.set_xlabel(rf"Probability Margin ($P_{{\text{{predicted}}}} - P_{{k\text{{-th\_best\_incorrect}}}}$)")
                 ax.set_ylabel("Samples")
             jp.add_legend(ax=ax)
-            jp.save(os.path.join(args.output_dir, "ar_policy_margin_overlaid_hist.png"))
+            jp.save(os.path.join(args.output_dir, "agnn_policy_margin_overlaid_hist.png"))
             
             # Subplots figure
             fig, axes = plt.subplots(1, 3, figsize=(15, 4))
@@ -1639,7 +1639,7 @@ def run_accuracy_benchmark(model, device, args):
                 if i == 0:
                     ax.set_ylabel("Samples")
             plt.tight_layout()
-            base_out = os.path.join(args.output_dir, "ar_policy_margin_subplots_hist")
+            base_out = os.path.join(args.output_dir, "agnn_policy_margin_subplots_hist")
             if is_045:
                 plt.savefig(f"{base_out}_045.pdf", bbox_inches="tight", dpi=200)
             else:
@@ -1659,7 +1659,7 @@ def run_accuracy_benchmark(model, device, args):
                 ax.set_xlabel("True Distance")
                 ax.set_ylabel("Average Margin")
             jp.add_legend(ax=ax)
-            jp.save(os.path.join(args.output_dir, "ar_policy_margin_by_distance.png"))
+            jp.save(os.path.join(args.output_dir, "agnn_policy_margin_by_distance.png"))
 
 
 
@@ -1667,81 +1667,81 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified Benchmark Neural Networks")
     
     # General Model Flags
-    parser.add_argument("--siamese", action="store_true", help="Benchmark Siamese inference")
-    parser.add_argument("--ar", action="store_true", help="Benchmark Autoregressive inference")
+    parser.add_argument("--dgnn", action="store_true", help="Benchmark DGNN inference")
+    parser.add_argument("--agnn", action="store_true", help="Benchmark AGNN inference")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to .pth checkpoint")
     
     # Inference params
     parser.add_argument("--dataset_root", type=str, default="Databases/Theories_dataset")
     parser.add_argument("--output_dir", type=str, default="analysis_unified/benchmarks")
     parser.add_argument("--nodes", type=int, nargs="+", default=None)
-    parser.add_argument("--hidden_channels_siamese", type=int, default=64)
-    parser.add_argument("--hidden_channels_ar", type=int, default=128)
+    parser.add_argument("--hidden_channels_dgnn", type=int, default=64)
+    parser.add_argument("--hidden_channels_agnn", type=int, default=128)
     parser.add_argument("--max_pairs_per_bucket", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=128)
     
-    # Siamese Specific
-    parser.add_argument("--extract_embeddings_siamese", action="store_true", help="Extract embeddings for t-SNE visualization (Siamese only)")
-    parser.add_argument("--evaluate_monotonicity_siamese", action="store_true", help="Evaluate heuristic triangle inequality (Siamese only)")
-    parser.add_argument("--benchmark_latency_siamese", action="store_true", help="Run latency benchmark only (no dataset needed, Siamese only)")
-    parser.add_argument("--evaluate_deterministic_benchmark_siamese", "--evaluate_deterministic_benchmark", dest="evaluate_deterministic_benchmark_siamese", action="store_true", help="Evaluate 3-way distance benchmark and permutation invariance (Siamese only)")
-    parser.add_argument("--max_deter_steps_siamese", "--max_deter_steps", dest="max_deter_steps_siamese", type=int, default=1000, help="Max steps for deterministic LCAPathfinder in 3-way benchmark")
+    # DGNN Specific
+    parser.add_argument("--extract_embeddings_dgnn", action="store_true", help="Extract embeddings for t-SNE visualization (DGNN only)")
+    parser.add_argument("--evaluate_monotonicity_dgnn", action="store_true", help="Evaluate heuristic triangle inequality (DGNN only)")
+    parser.add_argument("--benchmark_latency_dgnn", action="store_true", help="Run latency benchmark only (no dataset needed, DGNN only)")
+    parser.add_argument("--evaluate_deterministic_benchmark_dgnn", "--evaluate_deterministic_benchmark", dest="evaluate_deterministic_benchmark_dgnn", action="store_true", help="Evaluate 3-way distance benchmark and permutation invariance (DGNN only)")
+    parser.add_argument("--max_deter_steps_dgnn", "--max_deter_steps", dest="max_deter_steps_dgnn", type=int, default=1000, help="Max steps for deterministic LCAPathfinder in 3-way benchmark")
     
-    # AR Specific
-    parser.add_argument("--only_inference_ar", action="store_true", help="Run only hardware inference benchmark (AR only)")
-    parser.add_argument("--only_accuracy_ar", action="store_true", help="Run only physical accuracy benchmark (AR only)")
-    parser.add_argument("--evaluate_policy_margin_ar", action="store_true", help="Evaluate local policy margin (AR only)")
+    # AGNN Specific
+    parser.add_argument("--only_inference_agnn", action="store_true", help="Run only hardware inference benchmark (AGNN only)")
+    parser.add_argument("--only_accuracy_agnn", action="store_true", help="Run only physical accuracy benchmark (AGNN only)")
+    parser.add_argument("--evaluate_policy_margin_agnn", action="store_true", help="Evaluate local policy margin (AGNN only)")
     
     # Outputs
     parser.add_argument("--make_pdf", action="store_true", help="Generate .pdf and _045.pdf plots in addition to .png")
     
     args = parser.parse_args()
     
-    if not args.siamese and not args.ar:
-        args.siamese = True
-        args.ar = True
+    if not args.dgnn and not args.agnn:
+        args.dgnn = True
+        args.agnn = True
         
     os.makedirs(args.output_dir, exist_ok=True)
     
-    if args.siamese:
-        print("Benchmarking Siamese...")
-        siamese_out = os.path.join(args.output_dir, "siamese")
+    if args.dgnn:
+        print("Benchmarking DGNN...")
+        dgnn_out = os.path.join(args.output_dir, "dgnn")
         args_s = argparse.Namespace(**vars(args))
-        args_s.output_dir = siamese_out
-        if args.benchmark_latency_siamese:
-            run_siamese_latency_benchmark(args_s)
+        args_s.output_dir = dgnn_out
+        if args.benchmark_latency_dgnn:
+            run_dgnn_latency_benchmark(args_s)
         else:
             run_inference(args_s)
             
-    if args.ar:
-        print("Benchmarking Autoregressive...")
-        ar_out = os.path.join(args.output_dir, "ar")
+    if args.agnn:
+        print("Benchmarking AGNN...")
+        agnn_out = os.path.join(args.output_dir, "agnn")
         args_a = argparse.Namespace(**vars(args))
-        args_a.output_dir = ar_out
+        args_a.output_dir = agnn_out
         
         device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
         try:
             ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
             state_dict = ckpt.get("model_state_dict", ckpt)
         except Exception as e:
-            print(f"Warning: Loading AR checkpoint failed: {e}")
+            print(f"Warning: Loading AGNN checkpoint failed: {e}")
             state_dict = {}
 
-        hidden_dim = get_checkpoint_hidden_channels(state_dict, args.hidden_channels_ar, "Autoregressive")
+        hidden_dim = get_checkpoint_hidden_channels(state_dict, args.hidden_channels_agnn, "AGNN")
         use_delta_a = True
         classifier_weight = state_dict.get('classifier.0.weight') if isinstance(state_dict, dict) else None
         if classifier_weight is not None and hasattr(classifier_weight, 'shape'):
             in_features = classifier_weight.shape[1]
             if in_features == hidden_dim * 4 + 5:
                 use_delta_a = False
-                print("Autoregressive: Detected legacy AR checkpoint (no delta_A). Running in backward compatibility mode.")
+                print("AGNN: Detected legacy AGNN checkpoint (no delta_A). Running in backward compatibility mode.")
 
-        model = AutoregressiveGPS(hidden_channels=hidden_dim, use_delta_a=use_delta_a).to(device)
+        model = AGNNGPS(hidden_channels=hidden_dim, use_delta_a=use_delta_a).to(device)
         if state_dict:
             model.load_state_dict(state_dict, strict=False)
             
-        if not args.only_accuracy_ar:
+        if not args.only_accuracy_agnn:
             nodes_to_bench = args.nodes
             if not nodes_to_bench:
                 try:
@@ -1758,7 +1758,7 @@ if __name__ == "__main__":
                 
             os.makedirs(args_a.output_dir, exist_ok=True)
             df_inf = pd.DataFrame(all_inference_results)
-            df_inf.to_csv(os.path.join(args_a.output_dir, "ar_inference_benchmark.csv"), index=False)
+            df_inf.to_csv(os.path.join(args_a.output_dir, "agnn_inference_benchmark.csv"), index=False)
             
             try:
                 from scripts.plot_style import JHEPPlot
@@ -1781,7 +1781,7 @@ if __name__ == "__main__":
                 ax.set_yscale("log")
                 if not is_045: ax.set_title("Inference Latency by Node Count")
                 jp.add_legend(ax=ax)
-                jp.save(os.path.join(args_a.output_dir, "ar_inference_latency_vs_nodes"))
+                jp.save(os.path.join(args_a.output_dir, "agnn_inference_latency_vs_nodes"))
                 
                 fig, ax = jp.create_figure()
                 for bs in sorted(df_inf["batch_size"].unique()):
@@ -1792,9 +1792,9 @@ if __name__ == "__main__":
                 ax.set_yscale("log")
                 if not is_045: ax.set_title("Inference Throughput by Node Count")
                 jp.add_legend(ax=ax)
-                jp.save(os.path.join(args_a.output_dir, "ar_inference_throughput_vs_nodes"))
+                jp.save(os.path.join(args_a.output_dir, "agnn_inference_throughput_vs_nodes"))
                 
-        if not args.only_inference_ar:
+        if not args.only_inference_agnn:
             run_accuracy_benchmark(model, device, args_a)
 
     print("Benchmarking completed successfully.")

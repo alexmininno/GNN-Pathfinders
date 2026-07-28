@@ -34,7 +34,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pathfinders.find_path import (
     HeuristicBidirectionalPathfinder,
-    AutoregressivePathfinder,
+    AGNNPathfinder,
     HybridBidirectionalPathfinder,
     LCAPathfinder,
     HybridLCAPathfinder
@@ -408,26 +408,26 @@ def _worker_init(args):
     global _WORKERS
     device = torch.device("cpu")
     
-    if args.siamese or args.hybrid or args.hybrid_lca:
-        _WORKERS["siamese"] = HeuristicBidirectionalPathfinder(
-            model_path=args.siamese_model, hidden_channels=args.hidden_channels_siamese, device=device
+    if args.dgnn or args.hybrid or args.hybrid_lca:
+        _WORKERS["dgnn"] = HeuristicBidirectionalPathfinder(
+            model_path=args.dgnn_model, hidden_channels=args.hidden_channels_dgnn, device=device
         )
-    if args.ar or args.hybrid or args.hybrid_lca:
-        _WORKERS["ar"] = AutoregressivePathfinder(
-            model_path=args.ar_model, hidden_channels=args.hidden_channels_ar, device=device
+    if args.agnn or args.hybrid or args.hybrid_lca:
+        _WORKERS["agnn"] = AGNNPathfinder(
+            model_path=args.agnn_model, hidden_channels=args.hidden_channels_agnn, device=device
         )
     if args.hybrid:
         _WORKERS["hybrid"] = HybridBidirectionalPathfinder(
-            siamese_model_path=args.siamese_model, ar_model_path=args.ar_model,
-            hidden_channels_siamese=args.hidden_channels_siamese, hidden_channels_ar=args.hidden_channels_ar,
+            dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model,
+            hidden_channels_dgnn=args.hidden_channels_dgnn, hidden_channels_agnn=args.hidden_channels_agnn,
             device=device
         )
     if args.lca:
         _WORKERS["lca"] = LCAPathfinder()
     if args.hybrid_lca:
         _WORKERS["hybrid_lca"] = HybridLCAPathfinder(
-            siamese_model_path=args.siamese_model, ar_model_path=args.ar_model,
-            hidden_channels_siamese=args.hidden_channels_siamese, hidden_channels_ar=args.hidden_channels_ar,
+            dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model,
+            hidden_channels_dgnn=args.hidden_channels_dgnn, hidden_channels_agnn=args.hidden_channels_agnn,
             device=device
         )
 
@@ -504,17 +504,17 @@ def _worker_eval(task):
                     "hyperparameters": hyperparams
                 }
 
-    evaluate_model("siamese", 
-        lambda: _WORKERS["siamese"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free),
-        {"hidden_channels": args.hidden_channels_siamese}
+    evaluate_model("dgnn", 
+        lambda: _WORKERS["dgnn"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free),
+        {"hidden_channels": args.hidden_channels_dgnn}
     )
-    evaluate_model("ar",
-        lambda: _WORKERS["ar"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, beam_width=args.beam_width, enforce_anomaly_free=enforce_anomaly_free),
-        {"hidden_channels": args.hidden_channels_ar, "beam_width": args.beam_width}
+    evaluate_model("agnn",
+        lambda: _WORKERS["agnn"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, beam_width=args.beam_width, enforce_anomaly_free=enforce_anomaly_free),
+        {"hidden_channels": args.hidden_channels_agnn, "beam_width": args.beam_width}
     )
     evaluate_model("hybrid",
-        lambda: _WORKERS["hybrid"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free, lambda_ar=args.lambda_ar, top_k=args.top_k),
-        {"lambda_ar": args.lambda_ar, "top_k": args.top_k}
+        lambda: _WORKERS["hybrid"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=dynamic_max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free, lambda_agnn=args.lambda_agnn, top_k=args.top_k),
+        {"lambda_agnn": args.lambda_agnn, "top_k": args.top_k}
     )
     evaluate_model("lca",
         lambda: _WORKERS["lca"].find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps_lca, enforce_anomaly_free=enforce_anomaly_free),
@@ -523,14 +523,14 @@ def _worker_eval(task):
     evaluate_model("hybrid_lca",
         lambda: _WORKERS["hybrid_lca"].find_path(
             ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps_lca, max_nodes=args.max_nodes, enforce_anomaly_free=enforce_anomaly_free,
-            lambda_ar=args.lambda_ar, top_k=args.top_k,
-            lambda_det_cost=args.lambda_det_cost, lambda_siamese_h=args.lambda_siamese_h, lambda_lca_h=args.lambda_lca_h,
+            lambda_agnn=args.lambda_agnn, top_k=args.top_k,
+            lambda_det_cost=args.lambda_det_cost, lambda_dgnn_h=args.lambda_dgnn_h, lambda_lca_h=args.lambda_lca_h,
             cost_decrease=args.cost_decrease, cost_equal=args.cost_equal, cost_increase=args.cost_increase
         ),
         {
             "max_steps": args.max_steps_lca,
-            "lambda_ar": args.lambda_ar, "top_k": args.top_k,
-            "lambda_det_cost": args.lambda_det_cost, "lambda_siamese_h": args.lambda_siamese_h, "lambda_lca_h": args.lambda_lca_h,
+            "lambda_agnn": args.lambda_agnn, "top_k": args.top_k,
+            "lambda_det_cost": args.lambda_det_cost, "lambda_dgnn_h": args.lambda_dgnn_h, "lambda_lca_h": args.lambda_lca_h,
             "cost_decrease": args.cost_decrease, "cost_equal": args.cost_equal, "cost_increase": args.cost_increase
         }
     )
@@ -538,7 +538,7 @@ def _worker_eval(task):
     return results
 
 def evaluate(args):
-    if not (args.siamese or args.ar or args.hybrid or args.lca or args.hybrid_lca):
+    if not (args.dgnn or args.agnn or args.hybrid or args.lca or args.hybrid_lca):
         return
 
     enforce_anomaly_free = not args.relax_anomaly
@@ -631,8 +631,8 @@ def _generate_theory_plots(ds, ds_data, n_nodes, output_dir, jp_full, jp_045, me
     out_dir = os.path.join(output_dir, ds, f"Nodes_{n_nodes}")
     os.makedirs(out_dir, exist_ok=True)
     
-    models = ["ar_result", "siamese_result", "hybrid_result", "lca_result", "hybrid_lca_result"]
-    labels = {"ar_result": "AR", "siamese_result": "Siamese", "hybrid_result": "Hybrid", "lca_result": "LCA", "hybrid_lca_result": "Hybrid LCA"}
+    models = ["agnn_result", "dgnn_result", "hybrid_result", "lca_result", "hybrid_lca_result"]
+    labels = {"agnn_result": "AGNN", "dgnn_result": "DGNN", "hybrid_result": "Hybrid", "lca_result": "LCA", "hybrid_lca_result": "Hybrid LCA"}
     
     uuids_present = set()
     for e in ds_data:
@@ -801,7 +801,7 @@ def analyze(args):
     if 'dataset' not in df.columns:
         df['dataset'] = "Unknown"
         
-    models = ["siamese_result", "ar_result", "hybrid_result", "lca_result", "hybrid_lca_result"]
+    models = ["dgnn_result", "agnn_result", "hybrid_result", "lca_result", "hybrid_lca_result"]
     baseline = args.baseline
     
     def get_model_metric(row, model, metric):
@@ -866,11 +866,11 @@ def analyze(args):
         jp_045 = JHEPPlot(fontsize=11)
         
     def get_color(model):
-        colors = {'siamese_result': 'C0', 'ar_result': 'C1', 'hybrid_result': 'C2', 'lca_result': 'C3', 'hybrid_lca_result': 'C4'}
+        colors = {'dgnn_result': 'C0', 'agnn_result': 'C1', 'hybrid_result': 'C2', 'lca_result': 'C3', 'hybrid_lca_result': 'C4'}
         return colors.get(model, 'k')
         
     def get_label(model):
-        labels = {'siamese_result': 'Siamese', 'ar_result': 'AR', 'hybrid_result': 'Hybrid', 'lca_result': 'LCA', 'hybrid_lca_result': 'Hybrid LCA'}
+        labels = {'dgnn_result': 'DGNN', 'agnn_result': 'AGNN', 'hybrid_result': 'Hybrid', 'lca_result': 'LCA', 'hybrid_lca_result': 'Hybrid LCA'}
         return labels.get(model, model)
     
     for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
@@ -921,24 +921,24 @@ def analyze(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # Model Flags
-    parser.add_argument("--siamese", action="store_true")
-    parser.add_argument("--ar", action="store_true")
+    parser.add_argument("--dgnn", action="store_true")
+    parser.add_argument("--agnn", action="store_true")
     parser.add_argument("--hybrid", action="store_true")
     parser.add_argument("--lca", action="store_true")
     parser.add_argument("--hybrid_lca", action="store_true")
     
     # Model Paths
-    parser.add_argument("--siamese_model", type=str, default="best_siamese.pth")
-    parser.add_argument("--ar_model", type=str, default="best_autoregressive.pth")
+    parser.add_argument("--dgnn_model", type=str, default="best_dgnn.pth")
+    parser.add_argument("--agnn_model", type=str, default="best_agnn.pth")
     
     # Hyperparams
-    parser.add_argument("--hidden_channels_siamese", type=int, default=64)
-    parser.add_argument("--hidden_channels_ar", type=int, default=128)
+    parser.add_argument("--hidden_channels_dgnn", type=int, default=64)
+    parser.add_argument("--hidden_channels_agnn", type=int, default=128)
     parser.add_argument("--beam_width", type=int, default=3)
-    parser.add_argument("--lambda_ar", type=float, default=1.0)
+    parser.add_argument("--lambda_agnn", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=None)
     parser.add_argument("--lambda_det_cost", type=float, default=1.3)
-    parser.add_argument("--lambda_siamese_h", type=float, default=1.8)
+    parser.add_argument("--lambda_dgnn_h", type=float, default=1.8)
     parser.add_argument("--lambda_lca_h", type=float, default=0.0)
     parser.add_argument("--cost_decrease", type=float, default=0.3)
     parser.add_argument("--cost_equal", type=float, default=2.7)

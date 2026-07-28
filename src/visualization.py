@@ -265,9 +265,9 @@ def plot_data_quiver(data, ax=None, title="Quiver Visualization"):
         plt.show()
 
 
-def plot_siamese_metrics(history, save_path="plots/siamese_v3_metrics.png"):
+def plot_dgnn_metrics(history, save_path="plots/dgnn_v3_metrics.png"):
     """
-    Plot Siamese V3 Tracking metrics:
+    Plot DGNN V3 Tracking metrics:
     Dist Loss, Seq Loss, Dist MAE, Token Acc, Path Acc
     """
     epochs = range(1, len(history["train_dist_loss"]) + 1)

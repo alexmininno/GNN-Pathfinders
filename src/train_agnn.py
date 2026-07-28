@@ -14,8 +14,8 @@ import math
 # Add the project directory to the path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.siamese_dataset import CurriculumMixedDataset, collate_autoregressive
-from src.model_autoregressive import AutoregressiveGPS
+from src.dgnn_dataset import CurriculumMixedDataset, collate_agnn
+from src.model_agnn import AGNNGPS
 
 
 def accuracy_topk(output, target, topk=(1,)):
@@ -145,15 +145,15 @@ def resolve_log_path(logs_dir, is_resume):
     os.makedirs(logs_dir, exist_ok=True)
     import glob
     from datetime import datetime
-    existing = sorted(glob.glob(os.path.join(logs_dir, "train_*.csv")))
+    existing = sorted(glob.glob(os.path.join(logs_dir, "agnn_training_*.csv")))
     if is_resume and existing:
         return existing[-1]
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(logs_dir, f"train_{stamp}.csv")
+    return os.path.join(logs_dir, f"agnn_training_{stamp}.csv")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser("Train Autoregressive Seiberg GPS")
+    parser = argparse.ArgumentParser("Train AGNN Seiberg GPS")
     parser.add_argument("--db", type=str, default="Databases/Theories_dataset")
     parser.add_argument("--nodes", type=str, default="mix")
     parser.add_argument(
@@ -197,10 +197,10 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument(
-        "--checkpoint", type=str, default="checkpoint_autoregressive.pth"
+        "--checkpoint", type=str, default="checkpoint_agnn.pth"
     )
     parser.add_argument(
-        "--checkpoint_best", type=str, default="best_autoregressive.pth"
+        "--checkpoint_best", type=str, default="best_agnn.pth"
     )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
@@ -212,7 +212,7 @@ def parse_args():
 
     # Logging
     parser.add_argument("--save_logs", action="store_true", help="Save CSV logs")
-    parser.add_argument("--log_dir", type=str, default="logs_autoregressive")
+    parser.add_argument("--log_dir", type=str, default="logs_agnn")
 
     # Curriculum Control
     parser.add_argument(
@@ -338,17 +338,17 @@ def main():
     val_max_yields = args.max_val_batches * args.batch_size if args.max_val_batches else None
 
     train_dataset = CurriculumMixedDataset(
-        quotas=quotas, db_path=args.db, split="train", autoregressive=True, max_yields=train_max_yields, pe_channels=args.pe_channels
+        quotas=quotas, db_path=args.db, split="train", agnn=True, max_yields=train_max_yields, pe_channels=args.pe_channels
     )
     val_dataset = CurriculumMixedDataset(
-        quotas=quotas, db_path=args.db, split="test", autoregressive=True, max_yields=val_max_yields, pe_channels=args.pe_channels
+        quotas=quotas, db_path=args.db, split="test", agnn=True, max_yields=val_max_yields, pe_channels=args.pe_channels
     )
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        collate_fn=collate_autoregressive,
+        collate_fn=collate_agnn,
         persistent_workers=(args.num_workers > 0),
         pin_memory=(device.type == "cuda"),
     )
@@ -356,13 +356,13 @@ def main():
         val_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        collate_fn=collate_autoregressive,
+        collate_fn=collate_agnn,
         persistent_workers=(args.num_workers > 0),
         pin_memory=(device.type == "cuda"),
     )
 
     # 2. Model, Loss, Optimizer
-    model = AutoregressiveGPS(
+    model = AGNNGPS(
         in_channels=5,  # enhanced node features: rank + in_deg + out_deg + in_flux + out_flux
         pe_channels=args.pe_channels,
         hidden_channels=args.hidden_channels,
@@ -751,7 +751,7 @@ def main():
                             quotas=quotas,
                             db_path=args.db,
                             split="train",
-                            autoregressive=True,
+                            agnn=True,
                             max_yields=train_max_yields,
                             pe_channels=args.pe_channels,
                         )
@@ -759,7 +759,7 @@ def main():
                             train_dataset,
                             batch_size=args.batch_size,
                             num_workers=args.num_workers,
-                            collate_fn=collate_autoregressive,
+                            collate_fn=collate_agnn,
                             persistent_workers=(args.num_workers > 0),
                             pin_memory=(device.type == "cuda"),
                         )
@@ -773,7 +773,7 @@ def main():
                             quotas=quotas,
                             db_path=args.db,
                             split="test",
-                            autoregressive=True,
+                            agnn=True,
                             max_yields=val_max_yields,
                             pe_channels=args.pe_channels,
                         )
@@ -781,7 +781,7 @@ def main():
                             val_dataset,
                             batch_size=args.batch_size,
                             num_workers=args.num_workers,
-                            collate_fn=collate_autoregressive,
+                            collate_fn=collate_agnn,
                             persistent_workers=(args.num_workers > 0),
                             pin_memory=(device.type == "cuda"),
                         )

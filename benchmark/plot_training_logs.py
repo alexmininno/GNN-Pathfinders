@@ -10,12 +10,12 @@ except ImportError:
 
 from scripts.plot_style import JHEPPlot, InterceptJP
 
-def plot_ar_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
-    print(f"Reading Autoregressive log from {log_path}...")
+def plot_agnn_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
+    print(f"Reading AGNN log from {log_path}...")
     df = pd.read_csv(log_path)
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. AR Loss
+    # 1. AGNN Loss
     for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
         if is_045 and not make_pdf: continue
         jp = InterceptJP(raw_jp, is_045, make_pdf=make_pdf)
@@ -24,12 +24,12 @@ def plot_ar_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
         ax.plot(df['epoch'], df['val_loss'], label='Val Loss', color='C1', linewidth=1.5)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
-        ax.set_title('Autoregressive Model Loss')
+        ax.set_title('AGNN Model Loss')
         ax.grid(True, linestyle='--', alpha=0.6)
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(output_dir, 'ar_loss'))
+        jp.save(os.path.join(output_dir, 'agnn_loss'))
 
-    # 2. AR Accuracy
+    # 2. AGNN Accuracy
     for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
         if is_045 and not make_pdf: continue
         jp = InterceptJP(raw_jp, is_045, make_pdf=make_pdf)
@@ -39,17 +39,17 @@ def plot_ar_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
         ax.plot(df['epoch'], df['val_top3'], label='Top-3 Accuracy', color='C2', linewidth=1.5)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Validation Accuracy (%)')
-        ax.set_title('Autoregressive Validation Accuracy')
+        ax.set_title('AGNN Validation Accuracy')
         ax.grid(True, linestyle='--', alpha=0.6)
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(output_dir, 'ar_accuracy'))
+        jp.save(os.path.join(output_dir, 'agnn_accuracy'))
 
-def plot_siamese_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
-    print(f"Reading Siamese log from {log_path}...")
+def plot_dgnn_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
+    print(f"Reading DGNN log from {log_path}...")
     df = pd.read_csv(log_path)
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. Siamese Loss
+    # 1. DGNN Loss
     for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
         if is_045 and not make_pdf: continue
         jp = InterceptJP(raw_jp, is_045, make_pdf=make_pdf)
@@ -58,12 +58,12 @@ def plot_siamese_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
         ax.plot(df['epoch'], df['val_loss'], label='Val Loss', color='C1', linewidth=1.5)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
-        ax.set_title('Siamese Model Loss')
+        ax.set_title('DGNN Model Loss')
         ax.grid(True, linestyle='--', alpha=0.6)
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(output_dir, 'siamese_loss'))
+        jp.save(os.path.join(output_dir, 'dgnn_loss'))
 
-    # 2. Siamese MAE
+    # 2. DGNN MAE
     for is_045, raw_jp in [(False, jp_full), (True, jp_045)]:
         if is_045 and not make_pdf: continue
         jp = InterceptJP(raw_jp, is_045, make_pdf=make_pdf)
@@ -71,10 +71,10 @@ def plot_siamese_logs(log_path, output_dir, jp_full, jp_045, make_pdf):
         ax.plot(df['epoch'], df['val_dist_mae'], label='Validation MAE', color='C2', linewidth=1.5)
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Mean Absolute Error (MAE)')
-        ax.set_title('Siamese Validation Distance MAE')
+        ax.set_title('DGNN Validation Distance MAE')
         ax.grid(True, linestyle='--', alpha=0.6)
         jp.add_legend(ax=ax)
-        jp.save(os.path.join(output_dir, 'siamese_mae'))
+        jp.save(os.path.join(output_dir, 'dgnn_mae'))
 
 def get_latest_log(directory):
     log_files = glob.glob(os.path.join(directory, "*.csv"))
@@ -84,18 +84,18 @@ def get_latest_log(directory):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Training Logs")
-    parser.add_argument("--siamese", action="store_true", help="Plot Siamese logs")
-    parser.add_argument("--ar", action="store_true", help="Plot Autoregressive logs")
+    parser.add_argument("--dgnn", action="store_true", help="Plot DGNN logs")
+    parser.add_argument("--agnn", action="store_true", help="Plot AGNN logs")
     parser.add_argument("--make_pdf", action="store_true", help="Generate .pdf and _045.pdf plots in addition to .png")
-    parser.add_argument("--logs_dir_ar", type=str, default="logs_autoregressive")
-    parser.add_argument("--logs_dir_siamese", type=str, default="logs_siamese_v4")
+    parser.add_argument("--logs_dir_agnn", type=str, default="logs_agnn")
+    parser.add_argument("--logs_dir_dgnn", type=str, default="logs_dgnn")
     parser.add_argument("--output_dir", type=str, default="analysis_unified/log_plots")
     
     args = parser.parse_args()
     
-    if not args.siamese and not args.ar:
-        args.siamese = True
-        args.ar = True
+    if not args.dgnn and not args.agnn:
+        args.dgnn = True
+        args.agnn = True
         
     try:
         jp_full = JHEPPlot(intextwidth=6.6155, usetex=True, fontsize=11)
@@ -105,20 +105,20 @@ if __name__ == "__main__":
         jp_full = JHEPPlot(fontsize=11)
         jp_045 = JHEPPlot(fontsize=11)
         
-    if args.siamese:
-        print("Plotting Siamese logs...")
-        sia_log = get_latest_log(args.logs_dir_siamese)
-        if sia_log:
-            plot_siamese_logs(sia_log, args.output_dir, jp_full, jp_045, args.make_pdf)
+    if args.dgnn:
+        print("Plotting DGNN logs...")
+        dgnn_log = get_latest_log(args.logs_dir_dgnn)
+        if dgnn_log:
+            plot_dgnn_logs(dgnn_log, args.output_dir, jp_full, jp_045, args.make_pdf)
         else:
-            print(f"No logs found in {args.logs_dir_siamese}")
+            print(f"No logs found in {args.logs_dir_dgnn}")
             
-    if args.ar:
-        print("Plotting AR logs...")
-        ar_log = get_latest_log(args.logs_dir_ar)
-        if ar_log:
-            plot_ar_logs(ar_log, args.output_dir, jp_full, jp_045, args.make_pdf)
+    if args.agnn:
+        print("Plotting AGNN logs...")
+        agnn_log = get_latest_log(args.logs_dir_agnn)
+        if agnn_log:
+            plot_agnn_logs(agnn_log, args.output_dir, jp_full, jp_045, args.make_pdf)
         else:
-            print(f"No logs found in {args.logs_dir_ar}")
+            print(f"No logs found in {args.logs_dir_agnn}")
             
     print("Plotting completed successfully.")

@@ -1,7 +1,7 @@
 """
-predictor_siamese.py
+predictor_dgnn.py
 
-Universal predictor for Siamese Seiberg GNNs.
+Universal predictor for DGNN Seiberg GNNs.
 """
 
 import argparse
@@ -15,7 +15,7 @@ from torch_geometric.data import Data, Batch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
-class SiamesePredictor:
+class DGNNPredictor:
     def __init__(self, model_path, hidden_channels=64, device=None):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,10 +24,10 @@ class SiamesePredictor:
         else:
             self.device = device
 
-        from src.model_siamese import SiameseSeiberg
-        self.model = SiameseSeiberg(hidden_channels=hidden_channels)
+        from src.model_dgnn import DGNNSeiberg
+        self.model = DGNNSeiberg(hidden_channels=hidden_channels)
 
-        # print(f"Loading Siamese from {model_path} onto {self.device}")
+        # print(f"Loading DGNN from {model_path} onto {self.device}")
 
         if os.path.exists(model_path):
             checkpoint = torch.load(
@@ -108,9 +108,9 @@ class SiamesePredictor:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Siamese Predictor CLI")
+    parser = argparse.ArgumentParser(description="DGNN Predictor CLI")
     parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to Siamese checkpoint (.pth). Example: --model_path $CHECKPOINTS_DIR/best_siamese.pth"
+        "--model_path", type=str, required=True, help="Path to DGNN checkpoint (.pth). Example: --model_path $CHECKPOINTS_DIR/best_dgnn.pth"
     )
     parser.add_argument("--ranks_a", type=str, required=True, help="Ranks for Graph A as a list. Example: --ranks_a '[1, 2, 3]'")
     parser.add_argument(
@@ -128,9 +128,9 @@ if __name__ == "__main__":
     ranks_b = ast.literal_eval(args.ranks_b)
     adj_b = ast.literal_eval(args.adj_b)
 
-    predictor = SiamesePredictor(args.model_path)
+    predictor = DGNNPredictor(args.model_path)
     result = predictor.predict(ranks_a, adj_a, ranks_b, adj_b)
 
-    print(f"\n--- Siamese Pure Distance Prediction ---")
+    print(f"\n--- DGNN Pure Distance Prediction ---")
     print(f"Estimated Distance:   {result['estimated_distance']}")
     print("---------------------------------------------")

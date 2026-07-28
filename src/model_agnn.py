@@ -103,9 +103,9 @@ def get_enhanced_node_features(data):
     ], dim=-1)
 
 
-class AutoregressiveGPS(nn.Module):
+class AGNNGPS(nn.Module):
     """
-    Autoregressive Sequence-to-Sequence model for Seiberg Duality.
+    AGNN Sequence-to-Sequence model for Seiberg Duality.
     Maps (Graph A, Graph B) -> Probability distribution over nodes of Graph A.
     """
     def __init__(
@@ -128,7 +128,7 @@ class AutoregressiveGPS(nn.Module):
         self.pe_proj = nn.Linear(pe_channels, hidden_channels)
         self.input_norm = nn.LayerNorm(hidden_channels)
         
-        # Siamese Encoders
+        # DGNN Encoders
         self.encoders = nn.ModuleList([
             HybridGPSLayer(hidden_channels, nhead, dropout)
             for _ in range(num_encoder_layers)
