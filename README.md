@@ -317,7 +317,7 @@ Probabilities: [0.9606642723083496, 0.0013728442136198282, 0.0009281238890253007
 
 ```text
 usage: find_path.py [-h] [--dgnn] [--agnn] [--hybrid] [--lca] [--hybrid_lca]
-                    [--det] --ranks_a RANKS_A --adj_a ADJ_A --ranks_b RANKS_B
+                    --ranks_a RANKS_A --adj_a ADJ_A --ranks_b RANKS_B
                     --adj_b ADJ_B [--dgnn_model DGNN_MODEL]
                     [--agnn_model AGNN_MODEL] [--max_steps MAX_STEPS]
                     [--max_nodes MAX_NODES] [--beam_width BEAM_WIDTH]
@@ -337,7 +337,6 @@ options:
   --hybrid              Run Hybrid Bidirectional A* Pathfinder
   --lca                 Run Heuristic (LCA) Bidirectional A* Pathfinder
   --hybrid_lca          Run Deterministic Hybrid Bidirectional A* Pathfinder
-  --det                 Run Deterministic Greedy Pathfinder
   --ranks_a RANKS_A     Ranks for Graph A. Example: --ranks_a '[1, 2, 3]'
   --adj_a ADJ_A         Adjacency matrix for Graph A. Example: --adj_a
                         '[[0,1,0],[0,0,1],[1,0,0]]'
@@ -389,7 +388,7 @@ python pathfinders/find_path.py \
   --adj_a '[[0, 3, 0, 0, 1], [0, 0, 8, 0, 0], [3, 0, 0, 0, 0], [0, 1, 4, 0, 0], [0, 0, 1, 3, 0]]' \
   --ranks_b '[1, 1, 2, 1, 3]' \
   --adj_b '[[0, 0, 3, 0, 0], [3, 0, 0, 0, 0], [0, 1, 0, 0, 2], [0, 1, 4, 0, 0], [1, 0, 0, 3, 0]]' \
-  --dgnn --agnn --hybrid --lca --hybrid_lca --det \
+  --dgnn --agnn --hybrid --lca --hybrid_lca \
   --dgnn_model checkpoints/best_dgnn.pth \
   --agnn_model checkpoints/best_agnn.pth
 ```

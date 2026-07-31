@@ -1115,7 +1115,6 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid", action="store_true", help="Run Hybrid Bidirectional A* Pathfinder")
     parser.add_argument("--lca", action="store_true", help="Run Heuristic (LCA) Bidirectional A* Pathfinder")
     parser.add_argument("--hybrid_lca", action="store_true", help="Run Deterministic Hybrid Bidirectional A* Pathfinder")
-    parser.add_argument("--det", action="store_true", help="Run Deterministic Greedy Pathfinder")
     
     # Required parameters
     parser.add_argument("--ranks_a", type=str, required=True, help="Ranks for Graph A. Example: --ranks_a '[1, 2, 3]'")
@@ -1154,7 +1153,7 @@ if __name__ == "__main__":
     import json
     
     # If no specific method is chosen, run all of them
-    run_all = not (args.dgnn or args.agnn or args.hybrid or args.lca or args.hybrid_lca or args.det)
+    run_all = not (args.dgnn or args.agnn or args.hybrid or args.lca or args.hybrid_lca)
     
     print(f"Running Find Path...")
     print(f"Start Graph Ranks: {ranks_a}")
@@ -1163,12 +1162,6 @@ if __name__ == "__main__":
     
     results = {}
     
-    if args.det or run_all:
-        print("Running Deterministic Greedy Pathfinder (LCA)...")
-        pf = LCAPathfinder()
-        res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
-        print(f"Result: {json.dumps(res, indent=2)}\n")
-        
     if args.lca or run_all:
         print("Running Heuristic (LCA) Bidirectional A* Pathfinder...")
         pf = LCAPathfinder()
