@@ -1,6 +1,6 @@
 # Graphs Pathfinders
 
-This repository contains the codebase and data generation tools for tracing Seiberg dualities, as detailed in [arXiv:xxxx.yyyy [hep-th]](https://arxiv.org/abs/xxxx.yyyy). The project applies machine learning to the problem of establishing when two supersymmetric quiver gauge theories are dual. Mathematically, this translates to finding a sequence of quiver mutations connecting two graphs.
+This repository contains the codebase and data generation tools for tracing Seiberg dualities, as detailed in [arXiv:2607.28268 [hep-th]](https://arxiv.org/abs/2607.28268). The project applies machine learning to the problem of establishing when two supersymmetric quiver gauge theories are dual. Mathematically, this translates to finding a sequence of quiver mutations connecting two graphs.
 
 The code generates training datasets of quiver gauge theories originating from D-branes probing toric Calabi-Yau singularities. It includes two primary graph neural network (GNN) architectures built with transformer layers: a Distance GNN (DGNN) that estimates the minimum mutations required to connect a pair of theories, and an Adviser GNN (AGNN) that assigns probabilities to the vertices most likely to be dualized next.
 
