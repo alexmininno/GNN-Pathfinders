@@ -22,6 +22,16 @@ import itertools
 from src.data_utils import get_graph_hash, get_wl_hash, get_isomorphism_mapping, mutate_ranks, mutate_adjacency, is_connected
 
 
+def replay_path(ranks, adj, path, enforce_anomaly_free=True):
+    curr_ranks, curr_adj = ranks, adj
+    for k in path:
+        new_ranks = mutate_ranks(curr_ranks, curr_adj, k, enforce_anomaly_free)
+        if new_ranks is None:
+            return None, None
+        new_adj = mutate_adjacency(curr_adj, k)
+        curr_ranks, curr_adj = new_ranks, new_adj
+    return curr_ranks, curr_adj
+
 # ---------------------------------------------------------------------------
 # Pathfinder Engine
 # ---------------------------------------------------------------------------
@@ -1115,6 +1125,7 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid", action="store_true", help="Run Hybrid Bidirectional A* Pathfinder")
     parser.add_argument("--lca", action="store_true", help="Run Heuristic (LCA) Bidirectional A* Pathfinder")
     parser.add_argument("--hybrid_lca", action="store_true", help="Run Deterministic Hybrid Bidirectional A* Pathfinder")
+    parser.add_argument("--replay_path", action="store_true", help="Replay the found path to verify it reaches a graph isomorphic to the target")
     
     # Required parameters
     parser.add_argument("--ranks_a", type=str, required=True, help="Ranks for Graph A. Example: --ranks_a '[1, 2, 3]'")
@@ -1162,11 +1173,26 @@ if __name__ == "__main__":
     
     results = {}
     
+    def handle_result(res):
+        print(f"Result: {json.dumps(res, indent=2)}")
+        if args.replay_path and res.get("path") is not None:
+            path = res["path"]
+            final_ranks, final_adj = replay_path(ranks_a, adj_a, path, not args.relax_anomaly)
+            if final_ranks is None:
+                print("Replay Verification: FAILED (invalid mutation in path)")
+            else:
+                mapping = get_isomorphism_mapping(final_ranks, final_adj, ranks_b, adj_b)
+                if mapping is not None:
+                    print("Replay Verification: SUCCESS (isomorphic to target)")
+                else:
+                    print("Replay Verification: FAILED (not isomorphic to target)")
+        print()
+
     if args.lca or run_all:
         print("Running Heuristic (LCA) Bidirectional A* Pathfinder...")
         pf = LCAPathfinder()
         res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
-        print(f"Result: {json.dumps(res, indent=2)}\n")
+        handle_result(res)
         
     if args.dgnn or run_all:
         print("Running DGNN Bidirectional A* Pathfinder...")
@@ -1175,7 +1201,7 @@ if __name__ == "__main__":
         else:
             pf = HeuristicBidirectionalPathfinder(model_path=args.dgnn_model)
             res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, enforce_anomaly_free=not args.relax_anomaly)
-            print(f"Result: {json.dumps(res, indent=2)}\n")
+            handle_result(res)
 
     if args.agnn or run_all:
         print("Running AGNN Beam Search Pathfinder...")
@@ -1184,7 +1210,7 @@ if __name__ == "__main__":
         else:
             pf = AGNNPathfinder(model_path=args.agnn_model)
             res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, beam_width=args.beam_width, enforce_anomaly_free=not args.relax_anomaly)
-            print(f"Result: {json.dumps(res, indent=2)}\n")
+            handle_result(res)
 
     if args.hybrid or run_all:
         print("Running Hybrid Bidirectional A* Pathfinder...")
@@ -1193,7 +1219,7 @@ if __name__ == "__main__":
         else:
             pf = HybridBidirectionalPathfinder(dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model)
             res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, max_nodes=args.max_nodes, lambda_agnn=args.lambda_agnn, top_k=args.top_k, enforce_anomaly_free=not args.relax_anomaly)
-            print(f"Result: {json.dumps(res, indent=2)}\n")
+            handle_result(res)
 
     if args.hybrid_lca or run_all:
         print("Running Hybrid LCA Bidirectional A* Pathfinder...")
@@ -1202,4 +1228,4 @@ if __name__ == "__main__":
         else:
             pf = HybridLCAPathfinder(dgnn_model_path=args.dgnn_model, agnn_model_path=args.agnn_model)
             res = pf.find_path(ranks_a, adj_a, ranks_b, adj_b, max_steps=args.max_steps, lambda_agnn=args.lambda_agnn, top_k=args.top_k, enforce_anomaly_free=not args.relax_anomaly, lambda_det_cost=args.lambda_det_cost, lambda_dgnn_h=args.lambda_dgnn_h, lambda_lca_h=args.lambda_lca_h, cost_decrease=args.cost_decrease, cost_equal=args.cost_equal, cost_increase=args.cost_increase)
-            print(f"Result: {json.dumps(res, indent=2)}\n")
+            handle_result(res)
